@@ -1,0 +1,171 @@
+{% comment %}
+  AI FAQ Section - Theme App Extension Block
+  Renders the AI-generated FAQ section on product pages
+{% endcomment %}
+
+{% assign faq_metafield = product.metafields.ai_faq.faqs %}
+
+{% if faq_metafield != blank %}
+  {% assign faqs = faq_metafield.value %}
+
+  {% if faqs.size > 0 %}
+    <div
+      class="ai-faq-section"
+      id="ai-faq-{{ product.id }}"
+      style="
+        --faq-accent: {{ block.settings.accent_color }};
+        --faq-bg: {{ block.settings.background_color }};
+        --faq-text: {{ block.settings.text_color }};
+        --faq-border: {{ block.settings.border_color }};
+        font-family: {{ block.settings.font_family }};
+      "
+      {{ block.shopify_attributes }}
+    >
+      <div class="ai-faq-section__inner">
+        {% if block.settings.show_heading %}
+          <h2 class="ai-faq-section__heading">
+            {{ block.settings.heading | default: 'Frequently Asked Questions' }}
+          </h2>
+        {% endif %}
+
+        {% if block.settings.show_subheading and block.settings.subheading != blank %}
+          <p class="ai-faq-section__subheading">{{ block.settings.subheading }}</p>
+        {% endif %}
+
+        <div class="ai-faq-section__list">
+          {% for faq in faqs %}
+            <div class="ai-faq-item" data-index="{{ forloop.index }}">
+              <button
+                class="ai-faq-item__question"
+                aria-expanded="false"
+                aria-controls="faq-answer-{{ product.id }}-{{ forloop.index }}"
+                type="button"
+              >
+                <span class="ai-faq-item__question-text">{{ faq.question }}</span>
+                <span class="ai-faq-item__icon" aria-hidden="true">
+                  <svg class="ai-faq-item__icon-plus" width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M10 4V16M4 10H16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                  </svg>
+                  <svg class="ai-faq-item__icon-minus" width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M4 10H16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                  </svg>
+                </span>
+              </button>
+              <div
+                class="ai-faq-item__answer"
+                id="faq-answer-{{ product.id }}-{{ forloop.index }}"
+                aria-hidden="true"
+              >
+                <div class="ai-faq-item__answer-inner">
+                  <p>{{ faq.answer }}</p>
+                </div>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+
+        {% if block.settings.show_ai_badge %}
+          <div class="ai-faq-section__badge">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            AI-generated FAQs
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+    {{ 'ai-faq.css' | asset_url | stylesheet_tag }}
+    <script src="{{ 'ai-faq.js' | asset_url }}" defer></script>
+  {% endif %}
+{% endif %}
+
+{% schema %}
+{
+  "name": "AI FAQ Section",
+  "target": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "heading",
+      "label": "Heading",
+      "default": "Frequently Asked Questions"
+    },
+    {
+      "type": "checkbox",
+      "id": "show_heading",
+      "label": "Show heading",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "show_subheading",
+      "label": "Show subheading",
+      "default": false
+    },
+    {
+      "type": "text",
+      "id": "subheading",
+      "label": "Subheading text",
+      "default": "Everything you need to know about this product"
+    },
+    {
+      "type": "color",
+      "id": "accent_color",
+      "label": "Accent color",
+      "default": "#000000"
+    },
+    {
+      "type": "color",
+      "id": "background_color",
+      "label": "Background color",
+      "default": "#ffffff"
+    },
+    {
+      "type": "color",
+      "id": "text_color",
+      "label": "Text color",
+      "default": "#1a1a1a"
+    },
+    {
+      "type": "color",
+      "id": "border_color",
+      "label": "Border color",
+      "default": "#e5e5e5"
+    },
+    {
+      "type": "select",
+      "id": "font_family",
+      "label": "Font family",
+      "options": [
+        { "value": "inherit", "label": "Theme default" },
+        { "value": "sans-serif", "label": "Sans-serif" },
+        { "value": "serif", "label": "Serif" }
+      ],
+      "default": "inherit"
+    },
+    {
+      "type": "checkbox",
+      "id": "show_ai_badge",
+      "label": "Show 'AI-generated' badge",
+      "default": true
+    },
+    {
+      "type": "select",
+      "id": "animation",
+      "label": "Open/close animation",
+      "options": [
+        { "value": "smooth", "label": "Smooth slide" },
+        { "value": "none", "label": "None" }
+      ],
+      "default": "smooth"
+    }
+  ],
+  "presets": [
+    {
+      "name": "AI FAQ Section",
+      "category": "Product information"
+    }
+  ]
+}
+{% endschema %}

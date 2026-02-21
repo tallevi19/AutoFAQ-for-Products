@@ -1,0 +1,8 @@
+name = "AI FAQ Section"
+type = "theme"
+handle = "ai-faq-extension"
+
+[[extensions]]
+type = "theme"
+name = "AI FAQ Section"
+handle = "ai-faq-extension"

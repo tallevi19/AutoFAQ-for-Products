@@ -1,0 +1,132 @@
+/* AI FAQ Section - Storefront Styles */
+
+.ai-faq-section {
+  width: 100%;
+  padding: 2rem 0;
+  background-color: var(--faq-bg, #ffffff);
+  color: var(--faq-text, #1a1a1a);
+  font-family: var(--faq-font, inherit);
+  box-sizing: border-box;
+}
+
+.ai-faq-section__inner {
+  max-width: 100%;
+}
+
+.ai-faq-section__heading {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: 0 0 0.5rem 0;
+  color: var(--faq-text, #1a1a1a);
+  line-height: 1.3;
+}
+
+.ai-faq-section__subheading {
+  font-size: 0.95rem;
+  color: #666;
+  margin: 0 0 1.5rem 0;
+}
+
+.ai-faq-section__list {
+  margin-top: 1.25rem;
+  border-top: 1px solid var(--faq-border, #e5e5e5);
+}
+
+/* FAQ Item */
+.ai-faq-item {
+  border-bottom: 1px solid var(--faq-border, #e5e5e5);
+}
+
+.ai-faq-item__question {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  padding: 1.1rem 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--faq-text, #1a1a1a);
+  font-family: inherit;
+  gap: 1rem;
+}
+
+.ai-faq-item__question:hover .ai-faq-item__question-text {
+  color: var(--faq-accent, #000);
+}
+
+.ai-faq-item__question-text {
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.4;
+  transition: color 0.2s ease;
+  flex: 1;
+}
+
+.ai-faq-item__icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  color: var(--faq-accent, #000);
+  transition: transform 0.25s ease;
+}
+
+.ai-faq-item__icon-minus {
+  display: none;
+}
+
+.ai-faq-item--open .ai-faq-item__icon-plus {
+  display: none;
+}
+
+.ai-faq-item--open .ai-faq-item__icon-minus {
+  display: block;
+}
+
+/* Answer */
+.ai-faq-item__answer {
+  overflow: hidden;
+  max-height: 0;
+  transition: max-height 0.3s ease, opacity 0.3s ease;
+  opacity: 0;
+}
+
+.ai-faq-item__answer[aria-hidden="false"] {
+  opacity: 1;
+}
+
+.ai-faq-item__answer-inner {
+  padding-bottom: 1.1rem;
+}
+
+.ai-faq-item__answer-inner p {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.7;
+  color: #444;
+}
+
+/* AI Badge */
+.ai-faq-section__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 1.25rem;
+  font-size: 0.75rem;
+  color: #888;
+  padding: 0.25rem 0.6rem;
+  background: #f5f5f5;
+  border-radius: 999px;
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  .ai-faq-section__heading {
+    font-size: 1.25rem;
+  }
+
+  .ai-faq-item__question-text {
+    font-size: 0.95rem;
+  }
+}
