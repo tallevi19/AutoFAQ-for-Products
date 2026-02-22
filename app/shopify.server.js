@@ -5,7 +5,6 @@ import {
   shopifyApp,
 } from "@shopify/shopify-app-remix/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
-import { boundary } from "@shopify/shopify-app-remix/server";
 import prisma from "./db.server";
 
 const shopify = shopifyApp({
@@ -19,10 +18,8 @@ const shopify = shopifyApp({
   distribution: AppDistribution.AppStore,
   future: {
     unstable_newEmbeddedAuthStrategy: true,
+    removeRest: true,
   },
-  ...(process.env.SHOP_CUSTOM_DOMAIN
-    ? { customShopDomains: [process.env.SHOP_CUSTOM_DOMAIN] }
-    : {}),
 });
 
 export default shopify;
