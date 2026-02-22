@@ -6,7 +6,7 @@ handle = "shopify-ai-faq"
 
 [build]
 automatically_update_urls_on_dev = true
-dev_store_url = "https://autofaq-for-products.myshopify.com"
+dev_store_url = "autofaq-for-products.myshopify.com"
 
 [access_scopes]
 scopes = "read_products,write_products,read_metaobjects,write_metaobjects,read_metafield_definitions,write_metafield_definitions"
