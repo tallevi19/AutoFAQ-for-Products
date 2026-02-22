@@ -13,7 +13,6 @@ export default async function handleRequest(
   responseHeaders,
   remixContext
 ) {
-  // THIS is what adds the Content-Security-Policy header
   addDocumentResponseHeaders(request, responseHeaders);
 
   const userAgent = request.headers.get("user-agent");
@@ -21,35 +20,19 @@ export default async function handleRequest(
 
   return new Promise((resolve, reject) => {
     const { pipe, abort } = renderToPipeableStream(
-      <RemixServer
-        context={remixContext}
-        url={request.url}
-        abortDelay={ABORT_DELAY}
-      />,
+      <RemixServer context={remixContext} url={request.url} abortDelay={ABORT_DELAY} />,
       {
         [callbackName]: () => {
           const body = new PassThrough();
           const stream = createReadableStreamFromReadable(body);
-
           responseHeaders.set("Content-Type", "text/html");
-          resolve(
-            new Response(stream, {
-              headers: responseHeaders,
-              status: responseStatusCode,
-            })
-          );
+          resolve(new Response(stream, { headers: responseHeaders, status: responseStatusCode }));
           pipe(body);
         },
-        onShellError(error) {
-          reject(error);
-        },
-        onError(error) {
-          responseStatusCode = 500;
-          console.error(error);
-        },
+        onShellError(error) { reject(error); },
+        onError(error) { responseStatusCode = 500; console.error(error); },
       }
     );
-
     setTimeout(abort, ABORT_DELAY);
   });
 }
