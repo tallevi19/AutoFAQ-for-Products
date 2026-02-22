@@ -19,7 +19,8 @@ import {
 } from "@shopify/polaris";
 import { useState, useCallback, useEffect } from "react";
 import { authenticate } from "../shopify.server";
-import { getShopSettings, saveShopSettings, DEFAULT_MODELS } from "../lib/settings.server";
+import { getShopSettings, saveShopSettings } from "../lib/settings.server";
+import { DEFAULT_MODELS } from "../lib/models.js";
 import { validateApiKey } from "../lib/ai.server";
 
 export const loader = async ({ request }) => {
