@@ -5,8 +5,11 @@ import {
   Scripts,
   ScrollRestoration,
 } from "@remix-run/react";
+import { useNonce } from "@shopify/shopify-app-remix/react";
 
 export default function App() {
+  const nonce = useNonce();
+
   return (
     <html>
       <head>
@@ -22,8 +25,8 @@ export default function App() {
       </head>
       <body>
         <Outlet />
-        <ScrollRestoration />
-        <Scripts />
+        <ScrollRestoration nonce={nonce} />
+        <Scripts nonce={nonce} />
       </body>
     </html>
   );

@@ -13,6 +13,7 @@ export default async function handleRequest(
   responseHeaders,
   remixContext
 ) {
+  // THIS is what adds the Content-Security-Policy header
   addDocumentResponseHeaders(request, responseHeaders);
 
   const userAgent = request.headers.get("user-agent");
@@ -20,7 +21,11 @@ export default async function handleRequest(
 
   return new Promise((resolve, reject) => {
     const { pipe, abort } = renderToPipeableStream(
-      <RemixServer context={remixContext} url={request.url} />,
+      <RemixServer
+        context={remixContext}
+        url={request.url}
+        abortDelay={ABORT_DELAY}
+      />,
       {
         [callbackName]: () => {
           const body = new PassThrough();
