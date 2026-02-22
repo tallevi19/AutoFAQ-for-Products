@@ -15,7 +15,8 @@ scopes = "read_products,write_products,read_metaobjects,write_metaobjects,read_m
 redirect_urls = [
   "https://autofaq-for-products-production.up.railway.app/auth/callback",
   "https://autofaq-for-products-production.up.railway.app/auth/shopify/callback",
-  "https://autofaq-for-products-production.up.railway.app/api/auth/callback"
+  "https://autofaq-for-products-production.up.railway.app/api/auth/callback",
+  "https://autofaq-for-products-production.up.railway.app/app/billing/callback"
 ]
 
 [webhooks]
