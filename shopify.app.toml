@@ -1,6 +1,6 @@
 name = "shopify-ai-faq"
 client_id = "58574156bd72a524878cc02af2bf905c"
-application_url = "https://autofaq-for-products-production.up.railway.app"
+application_url = "https://autofaq-for-products-production.up.railway.app/app"
 embedded = true
 handle = "shopify-ai-faq"
 
