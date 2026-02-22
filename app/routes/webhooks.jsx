@@ -18,10 +18,15 @@ export const action = async ({ request }) => {
       // Optionally auto-regenerate FAQs on product update
       // (handled by autoGenerate setting)
       break;
-
+    case "CUSTOMERS_DATA_REQUEST":
+    case "CUSTOMERS_REDACT":
+    case "SHOP_REDACT":
+      // Log the request — legally you must acknowledge it
+      // If you store personal data, delete it here
+      console.log(`GDPR ${topic} for ${shop}`);
+      break;
     default:
       throw new Response("Unhandled webhook topic", { status: 404 });
   }
-
   throw new Response();
 };
