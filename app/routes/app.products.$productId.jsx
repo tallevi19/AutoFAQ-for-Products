@@ -29,7 +29,8 @@ export const loader = async ({ request, params }) => {
 
 export const action = async ({ request, params }) => {
   const { admin, session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const url = new URL(request.url);
+  const shop = session.shop || url.searchParams.get("shop") || "";
   const productId = `gid://shopify/Product/${params.productId}`;
   const formData = await request.formData();
   const intent = formData.get("intent");
