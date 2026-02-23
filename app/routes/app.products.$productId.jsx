@@ -13,6 +13,7 @@ import { generateFAQs } from "../lib/ai.server";
 import { canPerformAction, incrementUsage, getSubscriptionSummary } from "../lib/billing.server";
 import { UpgradeModal } from "../components/UpgradeModal.jsx";
 import prisma from "../db.server";
+import { useLoaderData, useFetcher, useNavigate, useParams } from "@remix-run/react";
 
 export const loader = async ({ request, params }) => {
   const { admin, session } = await authenticate.admin(request);
@@ -108,8 +109,7 @@ export default function ProductPage() {
     if (fetcherData.saved) setSavedBanner(true);
   }, [fetcherData]);
 
-  const handleGenerate = useCallback(() => { setSavedBanner(false); fetcher.submit({ intent: "generate" }, { method: "POST" }); }, [fetcher]);
-  const handleSave = useCallback(() => { fetcher.submit({ intent: "save", faqs: JSON.stringify(faqs) }, { method: "POST" }); }, [fetcher, faqs]);
+  const handleGenerate = useCallback(() => { setSavedBanner(false); fetcher.submit({ intent: "generate" }, { method: "POST", action: `/app/products/${params.productId}`, }); }, [fetcher, params.productId]);  const handleSave = useCallback(() => { fetcher.submit({ intent: "save", faqs: JSON.stringify(faqs) }, { method: "POST" }); }, [fetcher, faqs]);
   const handleEditStart = useCallback((index) => { setEditingIndex(index); setEditQuestion(faqs[index].question); setEditAnswer(faqs[index].answer); }, [faqs]);
   const handleEditSave = useCallback(() => { const updated = [...faqs]; updated[editingIndex] = { question: editQuestion, answer: editAnswer }; setFaqs(updated); setEditingIndex(null); setSavedBanner(false); }, [faqs, editingIndex, editQuestion, editAnswer]);
   const handleDelete = useCallback((index) => { setFaqs(faqs.filter((_, i) => i !== index)); setSavedBanner(false); }, [faqs]);
