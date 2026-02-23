@@ -1,11 +1,11 @@
 import { json } from "@remix-run/node";
-import { useLoaderData, useFetcher, useNavigate, useParams } from "@remix-run/react";
+import { useLoaderData, useParams } from "@remix-run/react";
 import {
   Page, Layout, Card, Text, BlockStack, InlineStack, Button, Banner,
-  Spinner, TextField, Badge, Divider, Box, EmptyState, Modal, Icon, Tooltip,
+  Spinner, TextField, Badge, Divider, Box, EmptyState, Modal, Tooltip,
 } from "@shopify/polaris";
 import { DeleteIcon, EditIcon, PlusIcon } from "@shopify/polaris-icons";
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { authenticate } from "../shopify.server";
 import { fetchProduct, getFaqsFromMetafield, saveFaqsToMetafield } from "../lib/shopify.server";
 import { getShopSettings } from "../lib/settings.server";
@@ -74,7 +74,7 @@ export const action = async ({ request, params }) => {
     try {
       await saveFaqsToMetafield(admin.graphql, productId, []);
       await prisma.productFAQ.deleteMany({ where: { shop, productId } });
-      return json({ success: true, deleted: true, faqs: [] });
+      return json({ success: true, deleted: true });
     } catch (error) { return json({ error: error.message }, { status: 500 }); }
   }
 
@@ -82,10 +82,8 @@ export const action = async ({ request, params }) => {
 };
 
 export default function ProductPage() {
-  const { product, faqs: initialFaqs, hasSettings, provider, subscription } = useLoaderData();
-  const fetcher = useFetcher();
+  const { product, faqs: initialFaqs, hasSettings, subscription } = useLoaderData();
   const params = useParams();
-  const navigate = useNavigate();
   const [faqs, setFaqs] = useState(initialFaqs);
   const [editingIndex, setEditingIndex] = useState(null);
   const [editQuestion, setEditQuestion] = useState("");
@@ -94,29 +92,61 @@ export default function ProductPage() {
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [upgradeContext, setUpgradeContext] = useState(null);
   const [savedBanner, setSavedBanner] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState(null);
 
   const actionUrl = `${APP_URL}/app/products/${params.productId}`;
 
-  const fetcherData = fetcher.data;
-  const isGenerating = fetcher.state !== "idle" && fetcher.formData?.get("intent") === "generate";
-  const isSaving = fetcher.state !== "idle" && fetcher.formData?.get("intent") === "save";
+  const postAction = useCallback(async (body) => {
+    const response = await fetch(actionUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(body).toString(),
+    });
+    return response.json();
+  }, [actionUrl]);
 
-  useEffect(() => {
-    if (!fetcherData) return;
-    if (fetcherData.limitHit) { setUpgradeContext(fetcherData.limitError); setShowUpgradeModal(true); return; }
-    if (fetcherData.faqs) setFaqs(fetcherData.faqs);
-    if (fetcherData.deleted) setFaqs([]);
-    if (fetcherData.saved) setSavedBanner(true);
-  }, [fetcherData]);
-
-  const handleGenerate = useCallback(() => {
+  const handleGenerate = useCallback(async () => {
+    setError(null);
     setSavedBanner(false);
-    fetcher.submit({ intent: "generate" }, { method: "POST", action: actionUrl });
-  }, [fetcher, actionUrl]);
+    setIsGenerating(true);
+    try {
+      const data = await postAction({ intent: "generate" });
+      if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
+      else if (data.error) setError(data.error);
+      else if (data.faqs) setFaqs(data.faqs);
+    } catch (e) {
+      setError("Failed to generate FAQs. Please try again.");
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [postAction]);
 
-  const handleSave = useCallback(() => {
-    fetcher.submit({ intent: "save", faqs: JSON.stringify(faqs) }, { method: "POST", action: actionUrl });
-  }, [fetcher, faqs, actionUrl]);
+  const handleSave = useCallback(async () => {
+    setError(null);
+    setIsSaving(true);
+    try {
+      const data = await postAction({ intent: "save", faqs: JSON.stringify(faqs) });
+      if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
+      else if (data.error) setError(data.error);
+      else if (data.saved) setSavedBanner(true);
+    } catch (e) {
+      setError("Failed to save FAQs. Please try again.");
+    } finally {
+      setIsSaving(false);
+    }
+  }, [postAction, faqs]);
+
+  const handleDeleteAll = useCallback(async () => {
+    try {
+      await postAction({ intent: "delete_all" });
+      setFaqs([]);
+      setShowDeleteModal(false);
+    } catch (e) {
+      setError("Failed to delete FAQs.");
+    }
+  }, [postAction]);
 
   const handleEditStart = useCallback((index) => {
     setEditingIndex(index);
@@ -164,7 +194,7 @@ export default function ProductPage() {
       <BlockStack gap="500">
         {!hasSettings && <Banner title="AI provider not configured" tone="warning" action={{ content: "Go to Settings", url: "/app/settings" }}><p>Connect your API key to generate FAQs.</p></Banner>}
         {showGenWarning && <Banner title={`${usage.generations.used} of ${usage.generations.limit} AI generations used this month`} tone="warning" action={{ content: "Upgrade Plan", url: "/app/billing" }}><p>Upgrade to avoid hitting your limit.</p></Banner>}
-        {fetcherData?.error && <Banner title="Error" tone="critical"><p>{fetcherData.error}</p></Banner>}
+        {error && <Banner title="Error" tone="critical" onDismiss={() => setError(null)}><p>{error}</p></Banner>}
         {savedBanner && <Banner title="FAQs published successfully!" tone="success" onDismiss={() => setSavedBanner(false)}><p>Your FAQ section is now live on the product page.</p></Banner>}
 
         <Layout>
@@ -200,7 +230,6 @@ export default function ProductPage() {
                     {hasFaqs && <Button icon={PlusIcon} onClick={handleAddFaq} size="slim">Add Question</Button>}
                   </InlineStack>
                   <Divider />
-
                   {isGenerating ? (
                     <Box padding="800">
                       <BlockStack gap="400" align="center" inlineAlign="center">
@@ -253,7 +282,7 @@ export default function ProductPage() {
       </BlockStack>
 
       <Modal open={showDeleteModal} onClose={() => setShowDeleteModal(false)} title="Delete all FAQs?"
-        primaryAction={{ content: "Delete", destructive: true, onAction: () => { fetcher.submit({ intent: "delete_all" }, { method: "POST", action: actionUrl }); setShowDeleteModal(false); } }}
+        primaryAction={{ content: "Delete", destructive: true, onAction: handleDeleteAll }}
         secondaryActions={[{ content: "Cancel", onAction: () => setShowDeleteModal(false) }]}>
         <Modal.Section><Text as="p">This will remove the FAQ section from this product page. This cannot be undone.</Text></Modal.Section>
       </Modal>
