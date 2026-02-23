@@ -24,8 +24,6 @@ const PRODUCT_QUERY = `
             title
             price
             sku
-            weight
-            weightUnit
             
             selectedOptions {
               name
