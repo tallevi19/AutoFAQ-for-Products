@@ -18,6 +18,7 @@ export const loader = async ({ request, params }) => {
   const { admin, session } = await authenticate.admin(request);
   const shopUrl = new URL(request.url);
   const shopDomain = session.shop || shopUrl.searchParams.get("shop") || "";
+  console.log("DEBUG shopDomain:", shopDomain);  // ← ADD THIS LINE
   const productId = `gid://shopify/Product/${params.productId}`;
   const [product, settings, summary] = await Promise.all([
     fetchProduct(admin.graphql, productId),
