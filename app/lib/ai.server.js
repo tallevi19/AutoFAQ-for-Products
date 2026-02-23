@@ -138,7 +138,7 @@ async function generateWithAnthropic(apiKey, model, product, faqCount) {
   const { systemPrompt, userPrompt } = buildPrompt(product, faqCount);
 
   const response = await client.messages.create({
-    model: model || "claude-3-5-sonnet-20241022",
+    model: model || "claude-sonnet-4-5",
     max_tokens: 2000,
     system: systemPrompt,
     messages: [{ role: "user", content: userPrompt }],
