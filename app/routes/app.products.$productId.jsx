@@ -16,11 +16,13 @@ import prisma from "../db.server";
 
 export const loader = async ({ request, params }) => {
   const { admin, session } = await authenticate.admin(request);
+  const shopUrl = new URL(request.url);
+  const shopDomain = session.shop || shopUrl.searchParams.get("shop") || "";
   const productId = `gid://shopify/Product/${params.productId}`;
   const [product, settings, summary] = await Promise.all([
     fetchProduct(admin.graphql, productId),
-    getShopSettings(session.shop),
-    getSubscriptionSummary(session.shop),
+    getShopSettings(shopDomain),
+    getSubscriptionSummary(shopDomain),
   ]);
   if (!product) throw new Response("Product not found", { status: 404 });
   const { faqs } = await getFaqsFromMetafield(admin.graphql, productId);
@@ -29,6 +31,8 @@ export const loader = async ({ request, params }) => {
 
 export const action = async ({ request, params }) => {
   const { admin, session } = await authenticate.admin(request);
+  const shopUrl = new URL(request.url);
+  const shopDomain = session.shop || shopUrl.searchParams.get("shop") || "";
   const url = new URL(request.url);
   const shop = session.shop || url.searchParams.get("shop") || "";
   const productId = `gid://shopify/Product/${params.productId}`;
