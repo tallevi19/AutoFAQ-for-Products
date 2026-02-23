@@ -1,5 +1,5 @@
 import { json } from "@remix-run/node";
-import { useLoaderData, useFetcher, useNavigate } from "@remix-run/react";
+import { useLoaderData, useFetcher, useNavigate, useParams } from "@remix-run/react";
 import {
   Page, Layout, Card, Text, BlockStack, InlineStack, Button, Banner,
   Spinner, TextField, Badge, Divider, Box, EmptyState, Modal, Icon, Tooltip,
@@ -13,7 +13,6 @@ import { generateFAQs } from "../lib/ai.server";
 import { canPerformAction, incrementUsage, getSubscriptionSummary } from "../lib/billing.server";
 import { UpgradeModal } from "../components/UpgradeModal.jsx";
 import prisma from "../db.server";
-import { useLoaderData, useFetcher, useNavigate, useParams } from "@remix-run/react";
 
 export const loader = async ({ request, params }) => {
   const { admin, session } = await authenticate.admin(request);
