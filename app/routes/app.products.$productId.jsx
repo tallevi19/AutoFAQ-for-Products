@@ -14,11 +14,12 @@ import { canPerformAction, incrementUsage, getSubscriptionSummary } from "../lib
 import { UpgradeModal } from "../components/UpgradeModal.jsx";
 import prisma from "../db.server";
 
+const APP_URL = "https://autofaq-for-products-production.up.railway.app";
+
 export const loader = async ({ request, params }) => {
   const { admin, session } = await authenticate.admin(request);
   const shopUrl = new URL(request.url);
   const shopDomain = session.shop || shopUrl.searchParams.get("shop") || "";
-  console.log("DEBUG shopDomain:", shopDomain);  // ← ADD THIS LINE
   const productId = `gid://shopify/Product/${params.productId}`;
   const [product, settings, summary] = await Promise.all([
     fetchProduct(admin.graphql, productId),
@@ -27,15 +28,11 @@ export const loader = async ({ request, params }) => {
   ]);
   if (!product) throw new Response("Product not found", { status: 404 });
   const { faqs } = await getFaqsFromMetafield(admin.graphql, productId);
-  console.log("DEBUG settings:", settings?.apiKey ? "HAS KEY" : "NO KEY", "shop:", shopDomain);
-  console.log("DEBUG hasSettings:", !!settings?.apiKey);
   return json({ product, faqs, hasSettings: !!settings?.apiKey, provider: settings?.aiProvider || "openai", subscription: summary });
 };
 
 export const action = async ({ request, params }) => {
   const { admin, session } = await authenticate.admin(request);
-  const shopUrl = new URL(request.url);
-  const shopDomain = session.shop || shopUrl.searchParams.get("shop") || "";
   const url = new URL(request.url);
   const shop = session.shop || url.searchParams.get("shop") || "";
   const productId = `gid://shopify/Product/${params.productId}`;
@@ -87,6 +84,8 @@ export const action = async ({ request, params }) => {
 export default function ProductPage() {
   const { product, faqs: initialFaqs, hasSettings, provider, subscription } = useLoaderData();
   const fetcher = useFetcher();
+  const params = useParams();
+  const navigate = useNavigate();
   const [faqs, setFaqs] = useState(initialFaqs);
   const [editingIndex, setEditingIndex] = useState(null);
   const [editQuestion, setEditQuestion] = useState("");
@@ -95,6 +94,8 @@ export default function ProductPage() {
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [upgradeContext, setUpgradeContext] = useState(null);
   const [savedBanner, setSavedBanner] = useState(false);
+
+  const actionUrl = `${APP_URL}/app/products/${params.productId}`;
 
   const fetcherData = fetcher.data;
   const isGenerating = fetcher.state !== "idle" && fetcher.formData?.get("intent") === "generate";
@@ -108,11 +109,41 @@ export default function ProductPage() {
     if (fetcherData.saved) setSavedBanner(true);
   }, [fetcherData]);
 
-  const handleGenerate = useCallback(() => { setSavedBanner(false); fetcher.submit({ intent: "generate" }, { method: "POST", action: `/app/products/${params.productId}`, }); }, [fetcher, params.productId]);  const handleSave = useCallback(() => { fetcher.submit({ intent: "save", faqs: JSON.stringify(faqs) }, { method: "POST" }); }, [fetcher, faqs]);
-  const handleEditStart = useCallback((index) => { setEditingIndex(index); setEditQuestion(faqs[index].question); setEditAnswer(faqs[index].answer); }, [faqs]);
-  const handleEditSave = useCallback(() => { const updated = [...faqs]; updated[editingIndex] = { question: editQuestion, answer: editAnswer }; setFaqs(updated); setEditingIndex(null); setSavedBanner(false); }, [faqs, editingIndex, editQuestion, editAnswer]);
-  const handleDelete = useCallback((index) => { setFaqs(faqs.filter((_, i) => i !== index)); setSavedBanner(false); }, [faqs]);
-  const handleAddFaq = useCallback(() => { setFaqs((prev) => [...prev, { question: "New question?", answer: "Answer here." }]); setEditingIndex(faqs.length); setEditQuestion("New question?"); setEditAnswer("Answer here."); setSavedBanner(false); }, [faqs]);
+  const handleGenerate = useCallback(() => {
+    setSavedBanner(false);
+    fetcher.submit({ intent: "generate" }, { method: "POST", action: actionUrl });
+  }, [fetcher, actionUrl]);
+
+  const handleSave = useCallback(() => {
+    fetcher.submit({ intent: "save", faqs: JSON.stringify(faqs) }, { method: "POST", action: actionUrl });
+  }, [fetcher, faqs, actionUrl]);
+
+  const handleEditStart = useCallback((index) => {
+    setEditingIndex(index);
+    setEditQuestion(faqs[index].question);
+    setEditAnswer(faqs[index].answer);
+  }, [faqs]);
+
+  const handleEditSave = useCallback(() => {
+    const updated = [...faqs];
+    updated[editingIndex] = { question: editQuestion, answer: editAnswer };
+    setFaqs(updated);
+    setEditingIndex(null);
+    setSavedBanner(false);
+  }, [faqs, editingIndex, editQuestion, editAnswer]);
+
+  const handleDelete = useCallback((index) => {
+    setFaqs(faqs.filter((_, i) => i !== index));
+    setSavedBanner(false);
+  }, [faqs]);
+
+  const handleAddFaq = useCallback(() => {
+    setFaqs((prev) => [...prev, { question: "New question?", answer: "Answer here." }]);
+    setEditingIndex(faqs.length);
+    setEditQuestion("New question?");
+    setEditAnswer("Answer here.");
+    setSavedBanner(false);
+  }, [faqs]);
 
   const hasFaqs = faqs.length > 0;
   const { plan, usage } = subscription;
@@ -171,7 +202,12 @@ export default function ProductPage() {
                   <Divider />
 
                   {isGenerating ? (
-                    <Box padding="800"><BlockStack gap="400" align="center" inlineAlign="center"><Spinner size="large" /><Text as="p" tone="subdued" alignment="center">AI is analyzing your product and generating FAQs...</Text></BlockStack></Box>
+                    <Box padding="800">
+                      <BlockStack gap="400" align="center" inlineAlign="center">
+                        <Spinner size="large" />
+                        <Text as="p" tone="subdued" alignment="center">AI is analyzing your product and generating FAQs...</Text>
+                      </BlockStack>
+                    </Box>
                   ) : hasFaqs ? (
                     <BlockStack gap="400">
                       {faqs.map((faq, index) => (
@@ -216,7 +252,9 @@ export default function ProductPage() {
         </Layout>
       </BlockStack>
 
-      <Modal open={showDeleteModal} onClose={() => setShowDeleteModal(false)} title="Delete all FAQs?" primaryAction={{ content: "Delete", destructive: true, onAction: () => { fetcher.submit({ intent: "delete_all" }, { method: "POST" }); setShowDeleteModal(false); } }} secondaryActions={[{ content: "Cancel", onAction: () => setShowDeleteModal(false) }]}>
+      <Modal open={showDeleteModal} onClose={() => setShowDeleteModal(false)} title="Delete all FAQs?"
+        primaryAction={{ content: "Delete", destructive: true, onAction: () => { fetcher.submit({ intent: "delete_all" }, { method: "POST", action: actionUrl }); setShowDeleteModal(false); } }}
+        secondaryActions={[{ content: "Cancel", onAction: () => setShowDeleteModal(false) }]}>
         <Modal.Section><Text as="p">This will remove the FAQ section from this product page. This cannot be undone.</Text></Modal.Section>
       </Modal>
 
