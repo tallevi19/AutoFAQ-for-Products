@@ -24,7 +24,6 @@ const PRODUCT_QUERY = `
             title
             price
             sku
-            
             selectedOptions {
               name
               value
