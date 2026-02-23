@@ -26,7 +26,7 @@ const PRODUCT_QUERY = `
             sku
             weight
             weightUnit
-            inventoryQuantity
+            
             selectedOptions {
               name
               value
