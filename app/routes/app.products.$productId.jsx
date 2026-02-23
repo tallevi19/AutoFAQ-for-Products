@@ -27,6 +27,7 @@ export const loader = async ({ request, params }) => {
   ]);
   if (!product) throw new Response("Product not found", { status: 404 });
   const { faqs } = await getFaqsFromMetafield(admin.graphql, productId);
+  console.log("DEBUG settings:", settings?.apiKey ? "HAS KEY" : "NO KEY", "shop:", shopDomain);
   return json({ product, faqs, hasSettings: !!settings?.apiKey, provider: settings?.aiProvider || "openai", subscription: summary });
 };
 
