@@ -1,11 +1,12 @@
 import { json } from "@remix-run/node";
-import { useLoaderData, useFetcher } from "@remix-run/react";
+import { useLoaderData, useParams } from "@remix-run/react";
+import { useAppBridge } from "@shopify/app-bridge-react";
 import {
   Page, Layout, Card, Text, BlockStack, InlineStack, Button, Banner,
   Spinner, TextField, Badge, Divider, Box, EmptyState, Modal, Tooltip,
 } from "@shopify/polaris";
 import { DeleteIcon, EditIcon, PlusIcon } from "@shopify/polaris-icons";
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { authenticate } from "../shopify.server";
 import { fetchProduct, getFaqsFromMetafield, saveFaqsToMetafield } from "../lib/shopify.server";
 import { getShopSettings } from "../lib/settings.server";
@@ -13,6 +14,8 @@ import { generateFAQs } from "../lib/ai.server";
 import { canPerformAction, incrementUsage, getSubscriptionSummary } from "../lib/billing.server";
 import { UpgradeModal } from "../components/UpgradeModal.jsx";
 import prisma from "../db.server";
+
+const APP_URL = "https://autofaq-for-products-production.up.railway.app";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "https://admin.shopify.com",
@@ -91,9 +94,8 @@ export const action = async ({ request, params }) => {
 
 export default function ProductPage() {
   const { product, faqs: initialFaqs, hasSettings, subscription } = useLoaderData();
-  const generateFetcher = useFetcher();
-  const saveFetcher     = useFetcher();
-  const deleteFetcher   = useFetcher();
+  const params = useParams();
+  const shopify = useAppBridge();
   const [faqs, setFaqs] = useState(initialFaqs);
   const [editingIndex, setEditingIndex] = useState(null);
   const [editQuestion, setEditQuestion] = useState("");
@@ -102,45 +104,65 @@ export default function ProductPage() {
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [upgradeContext, setUpgradeContext] = useState(null);
   const [savedBanner, setSavedBanner] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState(null);
 
-  const isGenerating = generateFetcher.state !== "idle";
-  const isSaving     = saveFetcher.state     !== "idle";
+  const actionUrl = `${APP_URL}/app/products/${params.productId}`;
 
-  useEffect(() => {
-    if (generateFetcher.state === "idle" && generateFetcher.data) {
-      const data = generateFetcher.data;
-      if (data.limitHit)   { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
-      else if (data.error) { setError(data.error); }
-      else if (data.faqs)  { setFaqs(data.faqs); }
-    }
-  }, [generateFetcher.state, generateFetcher.data]);
+  const postAction = useCallback(async (body) => {
+    const token = await shopify.idToken();
+    const response = await fetch(actionUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": `Bearer ${token}`,
+      },
+      body: new URLSearchParams(body).toString(),
+    });
+    return response.json();
+  }, [actionUrl, shopify]);
 
-  useEffect(() => {
-    if (saveFetcher.state === "idle" && saveFetcher.data) {
-      const data = saveFetcher.data;
-      if (data.limitHit)   { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
-      else if (data.error) { setError(data.error); }
-      else if (data.saved) { setSavedBanner(true); }
-    }
-  }, [saveFetcher.state, saveFetcher.data]);
-
-  const handleGenerate = useCallback(() => {
+  const handleGenerate = useCallback(async () => {
     setError(null);
     setSavedBanner(false);
-    generateFetcher.submit({ intent: "generate" }, { method: "POST" });
-  }, [generateFetcher]);
+    setIsGenerating(true);
+    try {
+      const data = await postAction({ intent: "generate" });
+      if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
+      else if (data.error) setError(data.error);
+      else if (data.faqs) setFaqs(data.faqs);
+    } catch (e) {
+      setError("Failed to generate FAQs. Please try again.");
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [postAction]);
 
-  const handleSave = useCallback(() => {
+  const handleSave = useCallback(async () => {
     setError(null);
-    saveFetcher.submit({ intent: "save", faqs: JSON.stringify(faqs) }, { method: "POST" });
-  }, [saveFetcher, faqs]);
+    setIsSaving(true);
+    try {
+      const data = await postAction({ intent: "save", faqs: JSON.stringify(faqs) });
+      if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
+      else if (data.error) setError(data.error);
+      else if (data.saved) setSavedBanner(true);
+    } catch (e) {
+      setError("Failed to save FAQs. Please try again.");
+    } finally {
+      setIsSaving(false);
+    }
+  }, [postAction, faqs]);
 
-  const handleDeleteAll = useCallback(() => {
-    deleteFetcher.submit({ intent: "delete_all" }, { method: "POST" });
-    setFaqs([]);
-    setShowDeleteModal(false);
-  }, [deleteFetcher]);
+  const handleDeleteAll = useCallback(async () => {
+    try {
+      await postAction({ intent: "delete_all" });
+      setFaqs([]);
+      setShowDeleteModal(false);
+    } catch (e) {
+      setError("Failed to delete FAQs.");
+    }
+  }, [postAction]);
 
   const handleEditStart = useCallback((index) => {
     setEditingIndex(index);
