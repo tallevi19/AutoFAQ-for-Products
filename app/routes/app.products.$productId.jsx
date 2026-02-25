@@ -16,6 +16,12 @@ import prisma from "../db.server";
 
 const APP_URL = "https://autofaq-for-products-production.up.railway.app";
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "https://admin.shopify.com",
+  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
 export const loader = async ({ request, params }) => {
   const { admin, session } = await authenticate.admin(request);
   const shopUrl = new URL(request.url);
@@ -32,6 +38,10 @@ export const loader = async ({ request, params }) => {
 };
 
 export const action = async ({ request, params }) => {
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+
   const { admin, session } = await authenticate.admin(request);
   const url = new URL(request.url);
   const shop = session.shop || url.searchParams.get("shop") || "";
@@ -41,44 +51,44 @@ export const action = async ({ request, params }) => {
 
   if (intent === "generate") {
     const check = await canPerformAction(shop, "generate");
-    if (!check.allowed) return json({ limitHit: true, limitError: check }, { status: 403 });
+    if (!check.allowed) return json({ limitHit: true, limitError: check }, { status: 403, headers: corsHeaders });
     const settings = await getShopSettings(shop);
-    if (!settings?.apiKey) return json({ error: "No API key configured. Go to Settings." }, { status: 400 });
+    if (!settings?.apiKey) return json({ error: "No API key configured. Go to Settings." }, { status: 400, headers: corsHeaders });
     const product = await fetchProduct(admin.graphql, productId);
-    if (!product) return json({ error: "Product not found" }, { status: 404 });
+    if (!product) return json({ error: "Product not found" }, { status: 404, headers: corsHeaders });
     try {
       const faqs = await generateFAQs({ apiKey: settings.apiKey, provider: settings.aiProvider, model: settings.model, product, faqCount: settings.faqCount });
       await incrementUsage(shop, "generation");
       await prisma.productFAQ.upsert({ where: { shop_productId: { shop, productId } }, update: { faqs: JSON.stringify(faqs), isPublished: false }, create: { shop, productId, faqs: JSON.stringify(faqs), isPublished: false } });
-      return json({ success: true, faqs, generated: true });
-    } catch (error) { return json({ error: error.message }, { status: 500 }); }
+      return json({ success: true, faqs, generated: true }, { headers: corsHeaders });
+    } catch (error) { return json({ error: error.message }, { status: 500, headers: corsHeaders }); }
   }
 
   if (intent === "save") {
     const check = await canPerformAction(shop, "publish_faq");
     if (!check.allowed) {
       const existing = await prisma.productFAQ.findUnique({ where: { shop_productId: { shop, productId } } });
-      if (!existing?.isPublished) return json({ limitHit: true, limitError: check }, { status: 403 });
+      if (!existing?.isPublished) return json({ limitHit: true, limitError: check }, { status: 403, headers: corsHeaders });
     }
     const faqsRaw = formData.get("faqs");
     let faqs;
-    try { faqs = JSON.parse(faqsRaw); } catch { return json({ error: "Invalid FAQ data" }, { status: 400 }); }
+    try { faqs = JSON.parse(faqsRaw); } catch { return json({ error: "Invalid FAQ data" }, { status: 400, headers: corsHeaders }); }
     try {
       await saveFaqsToMetafield(admin.graphql, productId, faqs);
       await prisma.productFAQ.upsert({ where: { shop_productId: { shop, productId } }, update: { faqs: JSON.stringify(faqs), isPublished: true }, create: { shop, productId, faqs: JSON.stringify(faqs), isPublished: true } });
-      return json({ success: true, saved: true, faqs });
-    } catch (error) { return json({ error: error.message }, { status: 500 }); }
+      return json({ success: true, saved: true, faqs }, { headers: corsHeaders });
+    } catch (error) { return json({ error: error.message }, { status: 500, headers: corsHeaders }); }
   }
 
   if (intent === "delete_all") {
     try {
       await saveFaqsToMetafield(admin.graphql, productId, []);
       await prisma.productFAQ.deleteMany({ where: { shop, productId } });
-      return json({ success: true, deleted: true });
-    } catch (error) { return json({ error: error.message }, { status: 500 }); }
+      return json({ success: true, deleted: true }, { headers: corsHeaders });
+    } catch (error) { return json({ error: error.message }, { status: 500, headers: corsHeaders }); }
   }
 
-  return json({ error: "Unknown intent" }, { status: 400 });
+  return json({ error: "Unknown intent" }, { status: 400, headers: corsHeaders });
 };
 
 export default function ProductPage() {
