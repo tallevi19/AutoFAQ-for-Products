@@ -5,7 +5,6 @@ import { AppProvider } from "@shopify/shopify-app-remix/react";
 import { NavMenu } from "@shopify/app-bridge-react";
 import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
 import { authenticate } from "../shopify.server";
-import { useEffect } from "react";
 
 export const links = () => [{ rel: "stylesheet", href: polarisStyles }];
 
@@ -32,18 +31,19 @@ export default function App() {
     } else {
       host = sessionStorage.getItem("shopify_host") || "";
     }
-  }
-
-  // Keep ?host= in the URL after client-side navigation so the App Bridge CDN
-  // script can always re-read it for postMessage targetOrigin on token refresh.
-  useEffect(() => {
-    if (!host) return;
-    const url = new URL(window.location.href);
-    if (!url.searchParams.has("host")) {
-      url.searchParams.set("host", host);
-      window.history.replaceState(null, "", url.toString());
+    // Keep ?host= in the URL synchronously on every render so App Bridge can
+    // read it at call-time for postMessage targetOrigin. A useEffect([host])
+    // would only fire when the host *value* changes — which never happens on
+    // navigation between /app/* routes because all reads come from the same
+    // sessionStorage entry.
+    if (host) {
+      const url = new URL(window.location.href);
+      if (!url.searchParams.has("host")) {
+        url.searchParams.set("host", host);
+        window.history.replaceState(null, "", url.toString());
+      }
     }
-  }, [host]);
+  }
 
   return (
     <AppProvider isEmbeddedApp apiKey={apiKey} host={host}>
