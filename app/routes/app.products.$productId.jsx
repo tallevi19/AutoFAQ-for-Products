@@ -1,5 +1,6 @@
 import { json } from "@remix-run/node";
 import { useLoaderData, useParams } from "@remix-run/react";
+import { useAppBridge } from "@shopify/app-bridge-react";
 import {
   Page, Layout, Card, Text, BlockStack, InlineStack, Button, Banner,
   Spinner, TextField, Badge, Divider, Box, EmptyState, Modal, Tooltip,
@@ -19,7 +20,7 @@ const APP_URL = "https://autofaq-for-products-production.up.railway.app";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "https://admin.shopify.com",
   "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
 export const loader = async ({ request, params }) => {
@@ -94,6 +95,7 @@ export const action = async ({ request, params }) => {
 export default function ProductPage() {
   const { product, faqs: initialFaqs, hasSettings, subscription } = useLoaderData();
   const params = useParams();
+  const shopify = useAppBridge();
   const [faqs, setFaqs] = useState(initialFaqs);
   const [editingIndex, setEditingIndex] = useState(null);
   const [editQuestion, setEditQuestion] = useState("");
@@ -109,13 +111,17 @@ export default function ProductPage() {
   const actionUrl = `${APP_URL}/app/products/${params.productId}`;
 
   const postAction = useCallback(async (body) => {
+    const token = await shopify.idToken();
     const response = await fetch(actionUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": `Bearer ${token}`,
+      },
       body: new URLSearchParams(body).toString(),
     });
     return response.json();
-  }, [actionUrl]);
+  }, [actionUrl, shopify]);
 
   const handleGenerate = useCallback(async () => {
     setError(null);
