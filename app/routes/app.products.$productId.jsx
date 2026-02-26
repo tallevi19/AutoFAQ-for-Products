@@ -111,7 +111,23 @@ export default function ProductPage() {
   const actionUrl = `${APP_URL}/app/products/${params.productId}`;
 
   const postAction = useCallback(async (body) => {
-    const token = await shopify.idToken();
+    // Imperatively ensure ?host= is present before idToken() so App Bridge
+    // can resolve the correct postMessage targetOrigin (admin.shopify.com).
+    const storedHost = sessionStorage.getItem("shopify_host");
+    if (storedHost) {
+      const currentUrl = new URL(window.location.href);
+      if (!currentUrl.searchParams.has("host")) {
+        currentUrl.searchParams.set("host", storedHost);
+        window.history.replaceState(null, "", currentUrl.toString());
+      }
+    }
+    // Race with a timeout so a hung idToken() surfaces as a real error.
+    const token = await Promise.race([
+      shopify.idToken(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Session token request timed out. Please reload the page.")), 10000)
+      ),
+    ]);
     const response = await fetch(actionUrl, {
       method: "POST",
       headers: {
@@ -133,7 +149,7 @@ export default function ProductPage() {
       else if (data.error) setError(data.error);
       else if (data.faqs) setFaqs(data.faqs);
     } catch (e) {
-      setError("Failed to generate FAQs. Please try again.");
+      setError(e?.message || "Failed to generate FAQs. Please try again.");
     } finally {
       setIsGenerating(false);
     }
@@ -148,7 +164,7 @@ export default function ProductPage() {
       else if (data.error) setError(data.error);
       else if (data.saved) setSavedBanner(true);
     } catch (e) {
-      setError("Failed to save FAQs. Please try again.");
+      setError(e?.message || "Failed to save FAQs. Please try again.");
     } finally {
       setIsSaving(false);
     }
