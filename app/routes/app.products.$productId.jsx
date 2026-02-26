@@ -1,12 +1,11 @@
 import { json } from "@remix-run/node";
-import { useLoaderData, useParams } from "@remix-run/react";
-import { useAppBridge } from "@shopify/app-bridge-react";
+import { useLoaderData, useParams, useFetcher } from "@remix-run/react";
 import {
   Page, Layout, Card, Text, BlockStack, InlineStack, Button, Banner,
   Spinner, TextField, Badge, Divider, Box, EmptyState, Modal, Tooltip,
 } from "@shopify/polaris";
 import { DeleteIcon, EditIcon, PlusIcon } from "@shopify/polaris-icons";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { authenticate } from "../shopify.server";
 import { fetchProduct, getFaqsFromMetafield, saveFaqsToMetafield } from "../lib/shopify.server";
 import { getShopSettings } from "../lib/settings.server";
@@ -14,14 +13,6 @@ import { generateFAQs } from "../lib/ai.server";
 import { canPerformAction, incrementUsage, getSubscriptionSummary } from "../lib/billing.server";
 import { UpgradeModal } from "../components/UpgradeModal.jsx";
 import prisma from "../db.server";
-
-const APP_URL = "https://autofaq-for-products-production.up.railway.app";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "https://admin.shopify.com",
-  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
-};
 
 export const loader = async ({ request, params }) => {
   const { admin, session } = await authenticate.admin(request);
@@ -40,9 +31,13 @@ export const loader = async ({ request, params }) => {
 
 export const action = async ({ request, params }) => {
   if (request.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: corsHeaders });
+    return new Response(null, { status: 204 });
   }
 
+  // App Bridge v4 (with unstable_newEmbeddedAuthStrategy) automatically patches
+  // window.fetch to inject Authorization: Bearer <session_token> on same-origin
+  // requests. useFetcher uses that patched fetch, so authenticate.admin() receives
+  // a valid token without any client-side token-fetching code.
   const { admin, session } = await authenticate.admin(request);
   const url = new URL(request.url);
   const shop = session.shop || url.searchParams.get("shop") || "";
@@ -52,50 +47,51 @@ export const action = async ({ request, params }) => {
 
   if (intent === "generate") {
     const check = await canPerformAction(shop, "generate");
-    if (!check.allowed) return json({ limitHit: true, limitError: check }, { status: 403, headers: corsHeaders });
+    if (!check.allowed) return json({ limitHit: true, limitError: check }, { status: 403 });
     const settings = await getShopSettings(shop);
-    if (!settings?.apiKey) return json({ error: "No API key configured. Go to Settings." }, { status: 400, headers: corsHeaders });
+    if (!settings?.apiKey) return json({ error: "No API key configured. Go to Settings." }, { status: 400 });
     const product = await fetchProduct(admin.graphql, productId);
-    if (!product) return json({ error: "Product not found" }, { status: 404, headers: corsHeaders });
+    if (!product) return json({ error: "Product not found" }, { status: 404 });
     try {
       const faqs = await generateFAQs({ apiKey: settings.apiKey, provider: settings.aiProvider, model: settings.model, product, faqCount: settings.faqCount });
       await incrementUsage(shop, "generation");
       await prisma.productFAQ.upsert({ where: { shop_productId: { shop, productId } }, update: { faqs: JSON.stringify(faqs), isPublished: false }, create: { shop, productId, faqs: JSON.stringify(faqs), isPublished: false } });
-      return json({ success: true, faqs, generated: true }, { headers: corsHeaders });
-    } catch (error) { return json({ error: error.message }, { status: 500, headers: corsHeaders }); }
+      return json({ success: true, faqs, generated: true });
+    } catch (error) { return json({ error: error.message }, { status: 500 }); }
   }
 
   if (intent === "save") {
     const check = await canPerformAction(shop, "publish_faq");
     if (!check.allowed) {
       const existing = await prisma.productFAQ.findUnique({ where: { shop_productId: { shop, productId } } });
-      if (!existing?.isPublished) return json({ limitHit: true, limitError: check }, { status: 403, headers: corsHeaders });
+      if (!existing?.isPublished) return json({ limitHit: true, limitError: check }, { status: 403 });
     }
     const faqsRaw = formData.get("faqs");
     let faqs;
-    try { faqs = JSON.parse(faqsRaw); } catch { return json({ error: "Invalid FAQ data" }, { status: 400, headers: corsHeaders }); }
+    try { faqs = JSON.parse(faqsRaw); } catch { return json({ error: "Invalid FAQ data" }, { status: 400 }); }
     try {
       await saveFaqsToMetafield(admin.graphql, productId, faqs);
       await prisma.productFAQ.upsert({ where: { shop_productId: { shop, productId } }, update: { faqs: JSON.stringify(faqs), isPublished: true }, create: { shop, productId, faqs: JSON.stringify(faqs), isPublished: true } });
-      return json({ success: true, saved: true, faqs }, { headers: corsHeaders });
-    } catch (error) { return json({ error: error.message }, { status: 500, headers: corsHeaders }); }
+      return json({ success: true, saved: true, faqs });
+    } catch (error) { return json({ error: error.message }, { status: 500 }); }
   }
 
   if (intent === "delete_all") {
     try {
       await saveFaqsToMetafield(admin.graphql, productId, []);
       await prisma.productFAQ.deleteMany({ where: { shop, productId } });
-      return json({ success: true, deleted: true }, { headers: corsHeaders });
-    } catch (error) { return json({ error: error.message }, { status: 500, headers: corsHeaders }); }
+      return json({ success: true, deleted: true });
+    } catch (error) { return json({ error: error.message }, { status: 500 }); }
   }
 
-  return json({ error: "Unknown intent" }, { status: 400, headers: corsHeaders });
+  return json({ error: "Unknown intent" }, { status: 400 });
 };
 
 export default function ProductPage() {
   const { product, faqs: initialFaqs, hasSettings, subscription } = useLoaderData();
   const params = useParams();
-  const shopify = useAppBridge();
+  const fetcher = useFetcher();
+
   const [faqs, setFaqs] = useState(initialFaqs);
   const [editingIndex, setEditingIndex] = useState(null);
   const [editQuestion, setEditQuestion] = useState("");
@@ -104,86 +100,43 @@ export default function ProductPage() {
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [upgradeContext, setUpgradeContext] = useState(null);
   const [savedBanner, setSavedBanner] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState(null);
 
-  const actionUrl = `${APP_URL}/app/products/${params.productId}`;
+  // Derive loading states from the single fetcher instance.
+  const currentIntent = fetcher.state !== "idle" ? fetcher.formData?.get("intent") : null;
+  const isGenerating = currentIntent === "generate";
+  const isSaving = currentIntent === "save";
 
-  const postAction = useCallback(async (body) => {
-    // Ensure ?host= is present before idToken() so App Bridge can resolve
-    // the correct postMessage targetOrigin (admin.shopify.com).
-    // We call History.prototype.replaceState directly (bypassing React Router's
-    // instance-level patch on window.history.replaceState) to avoid triggering
-    // loader re-validation and component remounting.
-    const storedHost = sessionStorage.getItem("shopify_host");
-    if (storedHost) {
-      const currentUrl = new URL(window.location.href);
-      if (!currentUrl.searchParams.has("host")) {
-        currentUrl.searchParams.set("host", storedHost);
-        Object.getPrototypeOf(window.history).replaceState.call(
-          window.history, null, "", currentUrl.toString()
-        );
-      }
+  // Handle the fetcher response exactly once when it transitions back to idle.
+  const prevStateRef = useRef(fetcher.state);
+  useEffect(() => {
+    const prev = prevStateRef.current;
+    prevStateRef.current = fetcher.state;
+    if (prev !== "idle" && fetcher.state === "idle" && fetcher.data) {
+      const data = fetcher.data;
+      if (data.faqs) setFaqs(data.faqs);
+      if (data.error) setError(data.error);
+      if (data.saved) setSavedBanner(true);
+      if (data.deleted) setFaqs([]);
+      if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
     }
-    // Race with a timeout so a hung idToken() surfaces as a real error.
-    const token = await Promise.race([
-      shopify.idToken(),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Session token request timed out. Please reload the page.")), 10000)
-      ),
-    ]);
-    const response = await fetch(actionUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Authorization": `Bearer ${token}`,
-      },
-      body: new URLSearchParams(body).toString(),
-    });
-    return response.json();
-  }, [actionUrl, shopify]);
+  }, [fetcher.state, fetcher.data]);
 
-  const handleGenerate = useCallback(async () => {
+  const handleGenerate = useCallback(() => {
     setError(null);
     setSavedBanner(false);
-    setIsGenerating(true);
-    try {
-      const data = await postAction({ intent: "generate" });
-      if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
-      else if (data.error) setError(data.error);
-      else if (data.faqs) setFaqs(data.faqs);
-    } catch (e) {
-      setError(e?.message || "Failed to generate FAQs. Please try again.");
-    } finally {
-      setIsGenerating(false);
-    }
-  }, [postAction]);
+    fetcher.submit({ intent: "generate" }, { method: "post" });
+  }, [fetcher]);
 
-  const handleSave = useCallback(async () => {
+  const handleSave = useCallback(() => {
     setError(null);
-    setIsSaving(true);
-    try {
-      const data = await postAction({ intent: "save", faqs: JSON.stringify(faqs) });
-      if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
-      else if (data.error) setError(data.error);
-      else if (data.saved) setSavedBanner(true);
-    } catch (e) {
-      setError(e?.message || "Failed to save FAQs. Please try again.");
-    } finally {
-      setIsSaving(false);
-    }
-  }, [postAction, faqs]);
+    fetcher.submit({ intent: "save", faqs: JSON.stringify(faqs) }, { method: "post" });
+  }, [fetcher, faqs]);
 
-  const handleDeleteAll = useCallback(async () => {
-    try {
-      await postAction({ intent: "delete_all" });
-      setFaqs([]);
-      setShowDeleteModal(false);
-    } catch (e) {
-      setError("Failed to delete FAQs.");
-    }
-  }, [postAction]);
+  const handleDeleteAll = useCallback(() => {
+    fetcher.submit({ intent: "delete_all" }, { method: "post" });
+    setShowDeleteModal(false);
+  }, [fetcher]);
 
   const handleEditStart = useCallback((index) => {
     setEditingIndex(index);
@@ -229,7 +182,7 @@ export default function ProductPage() {
       ]}
     >
       <BlockStack gap="500">
-        {!hasSettings && <Banner title="AI provider not configured" tone="warning" action={{ content: "Go to Settings", url: "/app/settings" }}><p>Connect your API key to generate FAQs.</p></Banner>}
+        {!hasSettings && <Banner title="AI provider not configured" tone="warning" action={{ content: "Go to Settings", url: "/app/settings" }}><p>Connect your API key in Settings to enable FAQ generation.</p></Banner>}
         {showGenWarning && <Banner title={`${usage.generations.used} of ${usage.generations.limit} AI generations used this month`} tone="warning" action={{ content: "Upgrade Plan", url: "/app/billing" }}><p>Upgrade to avoid hitting your limit.</p></Banner>}
         {error && <Banner title="Error" tone="critical" onDismiss={() => setError(null)}><p>{error}</p></Banner>}
         {savedBanner && <Banner title="FAQs published successfully!" tone="success" onDismiss={() => setSavedBanner(false)}><p>Your FAQ section is now live on the product page.</p></Banner>}
