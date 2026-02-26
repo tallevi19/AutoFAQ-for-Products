@@ -111,14 +111,19 @@ export default function ProductPage() {
   const actionUrl = `${APP_URL}/app/products/${params.productId}`;
 
   const postAction = useCallback(async (body) => {
-    // Imperatively ensure ?host= is present before idToken() so App Bridge
-    // can resolve the correct postMessage targetOrigin (admin.shopify.com).
+    // Ensure ?host= is present before idToken() so App Bridge can resolve
+    // the correct postMessage targetOrigin (admin.shopify.com).
+    // We call History.prototype.replaceState directly (bypassing React Router's
+    // instance-level patch on window.history.replaceState) to avoid triggering
+    // loader re-validation and component remounting.
     const storedHost = sessionStorage.getItem("shopify_host");
     if (storedHost) {
       const currentUrl = new URL(window.location.href);
       if (!currentUrl.searchParams.has("host")) {
         currentUrl.searchParams.set("host", storedHost);
-        window.history.replaceState(null, "", currentUrl.toString());
+        Object.getPrototypeOf(window.history).replaceState.call(
+          window.history, null, "", currentUrl.toString()
+        );
       }
     }
     // Race with a timeout so a hung idToken() surfaces as a real error.
