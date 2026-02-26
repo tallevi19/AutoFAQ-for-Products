@@ -34,11 +34,18 @@ export const action = async ({ request, params }) => {
     return new Response(null, { status: 204 });
   }
 
-  // App Bridge v4 (with unstable_newEmbeddedAuthStrategy) automatically patches
-  // window.fetch to inject Authorization: Bearer <session_token> on same-origin
-  // requests. useFetcher uses that patched fetch, so authenticate.admin() receives
-  // a valid token without any client-side token-fetching code.
-  const { admin, session } = await authenticate.admin(request);
+  // authenticate.admin() throws a redirect Response when no session token is present.
+  // Catch it and return JSON so useFetcher receives structured data instead of
+  // silently navigating away (which would make the button appear to do nothing).
+  let admin, session;
+  try {
+    ({ admin, session } = await authenticate.admin(request));
+  } catch (errorOrResponse) {
+    return json(
+      { error: "Session expired or not embedded. Please reload the page inside your Shopify admin." },
+      { status: 401 }
+    );
+  }
   const url = new URL(request.url);
   const shop = session.shop || url.searchParams.get("shop") || "";
   const productId = `gid://shopify/Product/${params.productId}`;
@@ -112,8 +119,14 @@ export default function ProductPage() {
   useEffect(() => {
     const prev = prevStateRef.current;
     prevStateRef.current = fetcher.state;
-    if (prev !== "idle" && fetcher.state === "idle" && fetcher.data) {
+    if (prev !== "idle" && fetcher.state === "idle") {
       const data = fetcher.data;
+      if (!data) {
+        // No JSON data returned — the action likely redirected (auth bounce page).
+        // This happens when App Bridge hasn't injected the session token yet.
+        setError("Authentication failed. Please reload this page inside your Shopify admin and try again.");
+        return;
+      }
       if (data.faqs) setFaqs(data.faqs);
       if (data.error) setError(data.error);
       if (data.saved) setSavedBanner(true);
