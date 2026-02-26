@@ -190,7 +190,9 @@ export default function ProductPage() {
       backAction={{ content: "Products", url: "/app/products" }}
       primaryAction={hasFaqs ? { content: isSaving ? "Saving..." : "Save & Publish", onAction: handleSave, loading: isSaving, disabled: isSaving } : undefined}
       secondaryActions={[
-        { content: isGenerating ? "Generating..." : hasFaqs ? "Regenerate FAQ" : "Generate FAQ", onAction: handleGenerate, loading: isGenerating, disabled: isGenerating || !hasSettings },
+        hasSettings
+          ? { content: isGenerating ? "Generating..." : hasFaqs ? "Regenerate FAQ" : "Generate FAQ", onAction: handleGenerate, loading: isGenerating, disabled: isGenerating }
+          : { content: "Setup AI Provider", url: "/app/settings" },
         ...(hasFaqs ? [{ content: "Delete All FAQs", destructive: true, onAction: () => setShowDeleteModal(true) }] : []),
       ]}
     >
