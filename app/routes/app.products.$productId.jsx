@@ -92,8 +92,6 @@ export const action = async ({ request, params }) => {
   return json({ error: "Unknown intent" }, { status: 400 });
 };
 
-const APP_URL = "https://autofaq-for-products-production.up.railway.app";
-
 export default function ProductPage() {
   const { product, faqs: initialFaqs, hasSettings, subscription } = useLoaderData();
   const params = useParams();
@@ -111,36 +109,66 @@ export default function ProductPage() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  const actionUrl = `${APP_URL}/app/products/${params.productId}`;
-
+  // postAction: get a fresh session token then POST to the Remix action
   const postAction = useCallback(async (body) => {
-    const token = await shopify.idToken();
-    const response = await fetch(actionUrl, {
+    // Guard: App Bridge must be initialised
+    if (!shopify || typeof shopify.idToken !== "function") {
+      throw new Error("App Bridge not available — reload this page inside your Shopify Admin.");
+    }
+
+    // Get a session token with an 8-second timeout
+    let token;
+    try {
+      token = await Promise.race([
+        shopify.idToken(),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Session token timed out (8 s) — make sure you're inside Shopify Admin.")),
+            8000
+          )
+        ),
+      ]);
+    } catch (err) {
+      throw new Error(`Could not authenticate: ${err.message}`);
+    }
+
+    // Use a relative URL so the request stays same-origin
+    const url = `/app/products/${params.productId}`;
+    const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
-        "Authorization": `Bearer ${token}`,
+        Authorization: `Bearer ${token}`,
       },
       body: new URLSearchParams(body).toString(),
     });
+
+    // If we got HTML back, authentication redirected us — surface that clearly
+    const ct = response.headers.get("content-type") || "";
+    if (!ct.includes("application/json")) {
+      throw new Error(`Server returned ${response.status} (non-JSON) — session may have expired, please reload.`);
+    }
+
     return response.json();
-  }, [actionUrl, shopify]);
+  }, [params.productId, shopify]);
 
   const handleGenerate = useCallback(async () => {
     setError(null);
     setSavedBanner(false);
     setIsGenerating(true);
+    // Toast confirms the click reached JS (visible even if the request fails)
+    try { shopify.toast.show("Generating FAQs…"); } catch (_) { /* App Bridge may not be ready */ }
     try {
       const data = await postAction({ intent: "generate" });
       if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
       else if (data.error) setError(data.error);
       else if (data.faqs) setFaqs(data.faqs);
     } catch (e) {
-      setError("Failed to generate FAQs. Please try again.");
+      setError(e.message || "Failed to generate FAQs. Please try again.");
     } finally {
       setIsGenerating(false);
     }
-  }, [postAction]);
+  }, [postAction, shopify]);
 
   const handleSave = useCallback(async () => {
     setError(null);
