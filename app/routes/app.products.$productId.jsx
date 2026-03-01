@@ -1,11 +1,12 @@
 import { json } from "@remix-run/node";
-import { useLoaderData, useParams, useFetcher } from "@remix-run/react";
+import { useLoaderData, useParams } from "@remix-run/react";
 import {
   Page, Layout, Card, Text, BlockStack, InlineStack, Button, Banner,
   Spinner, TextField, Badge, Divider, Box, EmptyState, Modal, Tooltip,
 } from "@shopify/polaris";
 import { DeleteIcon, EditIcon, PlusIcon } from "@shopify/polaris-icons";
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback } from "react";
+import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { fetchProduct, getFaqsFromMetafield, saveFaqsToMetafield } from "../lib/shopify.server";
 import { getShopSettings } from "../lib/settings.server";
@@ -34,9 +35,6 @@ export const action = async ({ request, params }) => {
     return new Response(null, { status: 204 });
   }
 
-  // authenticate.admin() throws a redirect Response when no session token is present.
-  // Catch it and return JSON so useFetcher receives structured data instead of
-  // silently navigating away (which would make the button appear to do nothing).
   let admin, session;
   try {
     ({ admin, session } = await authenticate.admin(request));
@@ -94,10 +92,12 @@ export const action = async ({ request, params }) => {
   return json({ error: "Unknown intent" }, { status: 400 });
 };
 
+const APP_URL = "https://autofaq-for-products-production.up.railway.app";
+
 export default function ProductPage() {
   const { product, faqs: initialFaqs, hasSettings, subscription } = useLoaderData();
   const params = useParams();
-  const fetcher = useFetcher();
+  const shopify = useAppBridge();
 
   const [faqs, setFaqs] = useState(initialFaqs);
   const [editingIndex, setEditingIndex] = useState(null);
@@ -108,48 +108,64 @@ export default function ProductPage() {
   const [upgradeContext, setUpgradeContext] = useState(null);
   const [savedBanner, setSavedBanner] = useState(false);
   const [error, setError] = useState(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
-  // Derive loading states from the single fetcher instance.
-  const currentIntent = fetcher.state !== "idle" ? fetcher.formData?.get("intent") : null;
-  const isGenerating = currentIntent === "generate";
-  const isSaving = currentIntent === "save";
+  const actionUrl = `${APP_URL}/app/products/${params.productId}`;
 
-  // Handle the fetcher response exactly once when it transitions back to idle.
-  const prevStateRef = useRef(fetcher.state);
-  useEffect(() => {
-    const prev = prevStateRef.current;
-    prevStateRef.current = fetcher.state;
-    if (prev !== "idle" && fetcher.state === "idle") {
-      const data = fetcher.data;
-      if (!data) {
-        // No JSON data returned — the action likely redirected (auth bounce page).
-        // This happens when App Bridge hasn't injected the session token yet.
-        setError("Authentication failed. Please reload this page inside your Shopify admin and try again.");
-        return;
-      }
-      if (data.faqs) setFaqs(data.faqs);
-      if (data.error) setError(data.error);
-      if (data.saved) setSavedBanner(true);
-      if (data.deleted) setFaqs([]);
-      if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
-    }
-  }, [fetcher.state, fetcher.data]);
+  const postAction = useCallback(async (body) => {
+    const token = await shopify.idToken();
+    const response = await fetch(actionUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": `Bearer ${token}`,
+      },
+      body: new URLSearchParams(body).toString(),
+    });
+    return response.json();
+  }, [actionUrl, shopify]);
 
-  const handleGenerate = useCallback(() => {
+  const handleGenerate = useCallback(async () => {
     setError(null);
     setSavedBanner(false);
-    fetcher.submit({ intent: "generate" }, { method: "post" });
-  }, [fetcher]);
+    setIsGenerating(true);
+    try {
+      const data = await postAction({ intent: "generate" });
+      if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
+      else if (data.error) setError(data.error);
+      else if (data.faqs) setFaqs(data.faqs);
+    } catch (e) {
+      setError("Failed to generate FAQs. Please try again.");
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [postAction]);
 
-  const handleSave = useCallback(() => {
+  const handleSave = useCallback(async () => {
     setError(null);
-    fetcher.submit({ intent: "save", faqs: JSON.stringify(faqs) }, { method: "post" });
-  }, [fetcher, faqs]);
+    setIsSaving(true);
+    try {
+      const data = await postAction({ intent: "save", faqs: JSON.stringify(faqs) });
+      if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
+      else if (data.error) setError(data.error);
+      else if (data.saved) setSavedBanner(true);
+    } catch (e) {
+      setError("Failed to save FAQs. Please try again.");
+    } finally {
+      setIsSaving(false);
+    }
+  }, [postAction, faqs]);
 
-  const handleDeleteAll = useCallback(() => {
-    fetcher.submit({ intent: "delete_all" }, { method: "post" });
-    setShowDeleteModal(false);
-  }, [fetcher]);
+  const handleDeleteAll = useCallback(async () => {
+    try {
+      await postAction({ intent: "delete_all" });
+      setFaqs([]);
+      setShowDeleteModal(false);
+    } catch (e) {
+      setError("Failed to delete FAQs.");
+    }
+  }, [postAction]);
 
   const handleEditStart = useCallback((index) => {
     setEditingIndex(index);
