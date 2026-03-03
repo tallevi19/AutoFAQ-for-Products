@@ -1,5 +1,5 @@
 import { json } from "@remix-run/node";
-import { useLoaderData, useParams } from "@remix-run/react";
+import { useLoaderData, useParams, useNavigate } from "@remix-run/react";
 import {
   Page, Layout, Card, Text, BlockStack, InlineStack, Button, Banner,
   Spinner, TextField, Badge, Divider, Box, EmptyState, Modal, Tooltip,
@@ -108,6 +108,8 @@ export default function ProductPage() {
   const [error, setError] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  const navigate = useNavigate();
 
   // postAction: get a fresh session token then POST to the Remix action
   const postAction = useCallback(async (body) => {
@@ -231,17 +233,17 @@ export default function ProductPage() {
     <Page
       title={product.title}
       subtitle="Manage AI-generated FAQ section"
-      backAction={{ content: "Products", url: "/app/products" }}
+      backAction={{ content: "Products", onAction: () => navigate("/app/products") }}
       primaryAction={hasFaqs ? { content: isSaving ? "Saving..." : "Save & Publish", onAction: handleSave, loading: isSaving, disabled: isSaving } : undefined}
       secondaryActions={[
         hasSettings
           ? { content: isGenerating ? "Generating..." : hasFaqs ? "Regenerate FAQ" : "Generate FAQ", onAction: handleGenerate, loading: isGenerating, disabled: isGenerating }
-          : { content: "Setup AI Provider", url: "/app/settings" },
+          : { content: "Setup AI Provider", onAction: () => navigate("/app/settings") },
         ...(hasFaqs ? [{ content: "Delete All FAQs", destructive: true, onAction: () => setShowDeleteModal(true) }] : []),
       ]}
     >
       <BlockStack gap="500">
-        {!hasSettings && <Banner title="AI provider not configured" tone="warning" action={{ content: "Go to Settings", url: "/app/settings" }}><p>Connect your API key in Settings to enable FAQ generation.</p></Banner>}
+        {!hasSettings && <Banner title="AI provider not configured" tone="warning" action={{ content: "Go to Settings", onAction: () => navigate("/app/settings") }}><p>Connect your API key in Settings to enable FAQ generation.</p></Banner>}
         {showGenWarning && <Banner title={`${usage.generations.used} of ${usage.generations.limit} AI generations used this month`} tone="warning" action={{ content: "Upgrade Plan", url: "/app/billing" }}><p>Upgrade to avoid hitting your limit.</p></Banner>}
         {error && <Banner title="Error" tone="critical" onDismiss={() => setError(null)}><p>{error}</p></Banner>}
         {savedBanner && <Banner title="FAQs published successfully!" tone="success" onDismiss={() => setSavedBanner(false)}><p>Your FAQ section is now live on the product page.</p></Banner>}
@@ -276,7 +278,21 @@ export default function ProductPage() {
                       <Text as="h2" variant="headingMd">FAQ Section</Text>
                       {hasFaqs && <Text as="p" tone="subdued" variant="bodySm">{faqs.length} question{faqs.length !== 1 ? "s" : ""}</Text>}
                     </BlockStack>
-                    {hasFaqs && <Button icon={PlusIcon} onClick={handleAddFaq} size="slim">Add Question</Button>}
+                    <InlineStack gap="200">
+                      {hasSettings ? (
+                        <Button
+                          variant="primary"
+                          onClick={handleGenerate}
+                          loading={isGenerating}
+                          disabled={isGenerating}
+                        >
+                          {isGenerating ? "Generating..." : hasFaqs ? "Regenerate FAQ" : "Generate FAQ"}
+                        </Button>
+                      ) : (
+                        <Button onClick={() => navigate("/app/settings")}>Setup AI Provider</Button>
+                      )}
+                      {hasFaqs && <Button icon={PlusIcon} onClick={handleAddFaq} size="slim">Add Question</Button>}
+                    </InlineStack>
                   </InlineStack>
                   <Divider />
                   {isGenerating ? (
@@ -319,7 +335,7 @@ export default function ProductPage() {
                       ))}
                     </BlockStack>
                   ) : (
-                    <EmptyState heading="No FAQs generated yet" image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png" action={hasSettings ? { content: "Generate FAQ", onAction: handleGenerate } : { content: "Setup AI Provider", url: "/app/settings" }}>
+                    <EmptyState heading="No FAQs generated yet" image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png" action={hasSettings ? { content: "Generate FAQ", onAction: handleGenerate } : { content: "Setup AI Provider", onAction: () => navigate("/app/settings") }}>
                       <p>Click Generate FAQ to let AI analyze your product data and create helpful Q&As.</p>
                     </EmptyState>
                   )}
