@@ -232,11 +232,9 @@ export default function ProductPage() {
       secondaryActions={hasFaqs ? [{ content: "Delete All FAQs", destructive: true, onAction: () => setShowDeleteModal(true) }] : []}
     >
       <BlockStack gap="500">
-        {!hasSettings && (
-          <Banner title="AI provider not configured" tone="warning" action={{ content: "Go to Settings", url: "/app/settings" }}>
-            <p>Connect your API key in Settings to enable FAQ generation.</p>
-          </Banner>
-        )}
+        <Banner title={`Status: API key ${hasSettings ? "configured ✓" : "NOT configured ✗"} — Shop: ${shopDomain || "(empty)"}`} tone={hasSettings ? "success" : "warning"} action={hasSettings ? undefined : { content: "Go to Settings", url: "/app/settings" }}>
+          {!hasSettings && <p>Enter and save your API key on the Settings page to enable FAQ generation.</p>}
+        </Banner>
         {showGenWarning && (
           <Banner title={`${usage.generations.used} of ${usage.generations.limit} AI generations used this month`} tone="warning" action={{ content: "Upgrade Plan", url: "/app/billing" }}>
             <p>Upgrade to avoid hitting your limit.</p>
