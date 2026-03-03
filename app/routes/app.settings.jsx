@@ -1,11 +1,11 @@
 import { json } from "@remix-run/node";
-import { useLoaderData, useFetcher } from "@remix-run/react";
+import { useLoaderData } from "@remix-run/react";
 import {
   Page, Layout, Card, Text, BlockStack, InlineStack, Button,
-  Banner, Select, TextField, Checkbox, Divider, Badge, RangeSlider, Box,
+  Banner, Select, TextField, Checkbox, Divider, Badge, RangeSlider,
 } from "@shopify/polaris";
-import { useState, useCallback, useEffect } from "react";
-import { authenticate } from "../shopify.server";
+import { useState, useCallback } from "react";
+import { authenticate, unauthenticated } from "../shopify.server";
 import { getShopSettings, saveShopSettings } from "../lib/settings.server";
 import { DEFAULT_MODELS, AVAILABLE_MODELS } from "../lib/models.js";
 import { validateApiKey } from "../lib/ai.server";
@@ -14,6 +14,7 @@ export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const settings = await getShopSettings(session.shop);
   return json({
+    shopDomain: session.shop,
     settings: settings ? {
       aiProvider: settings.aiProvider,
       model: settings.model,
@@ -27,9 +28,21 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
   const formData = await request.formData();
+  const shopDomainFromForm = formData.get("shopDomain");
+  if (!shopDomainFromForm) {
+    return json({ error: "Missing shop. Please reload." }, { status: 400 });
+  }
+  let admin, sessionShop;
+  try {
+    ({ admin } = await unauthenticated.admin(shopDomainFromForm));
+    sessionShop = shopDomainFromForm;
+  } catch {
+    return json({ error: "Session expired. Please reload and try again." }, { status: 401 });
+  }
+
   const intent = formData.get("intent");
+
   if (intent === "save") {
     const apiKey = formData.get("apiKey");
     const aiProvider = formData.get("aiProvider");
@@ -38,9 +51,10 @@ export const action = async ({ request }) => {
     const autoGenerate = formData.get("autoGenerate") === "true";
     const updateData = { aiProvider, model, faqCount: parseInt(faqCount), autoGenerate };
     if (apiKey && !apiKey.includes("•")) updateData.apiKey = apiKey;
-    await saveShopSettings(session.shop, updateData);
+    await saveShopSettings(sessionShop, updateData);
     return json({ success: true, message: "Settings saved successfully!" });
   }
+
   if (intent === "validate") {
     const apiKey = formData.get("apiKey");
     const provider = formData.get("provider");
@@ -48,26 +62,38 @@ export const action = async ({ request }) => {
     const result = await validateApiKey(apiKey, provider);
     return json(result);
   }
+
   return json({ error: "Unknown intent" }, { status: 400 });
 };
 
+function xhrPost(url, fields, onResult, onError) {
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", url, true);
+  xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState !== 4) return;
+    try {
+      onResult(JSON.parse(xhr.responseText));
+    } catch {
+      onError("Server error (" + xhr.status + "). Please try again.");
+    }
+  };
+  xhr.onerror = function () { onError("Network error. Please try again."); };
+  xhr.send(new URLSearchParams(fields).toString());
+}
+
 export default function SettingsPage() {
-  const { settings, models } = useLoaderData();
-  const fetcher = useFetcher();
+  const { settings, models, shopDomain } = useLoaderData();
   const [provider, setProvider] = useState(settings?.aiProvider || "openai");
   const [model, setModel] = useState(settings?.model || "gpt-4o-mini");
   const [apiKey, setApiKey] = useState(settings?.apiKeyPreview || "");
   const [faqCount, setFaqCount] = useState(settings?.faqCount || 5);
   const [autoGenerate, setAutoGenerate] = useState(settings?.autoGenerate || false);
   const [validationResult, setValidationResult] = useState(null);
-
-  const fetcherData = fetcher.data;
-  const isValidating = fetcher.state !== "idle" && fetcher.formData?.get("intent") === "validate";
-  const isSaving = fetcher.state !== "idle" && fetcher.formData?.get("intent") === "save";
-
-  useEffect(() => {
-    if (fetcherData?.valid !== undefined) setValidationResult(fetcherData);
-  }, [fetcherData]);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isValidating, setIsValidating] = useState(false);
+  const [saveResult, setSaveResult] = useState(null);
+  const [saveError, setSaveError] = useState(null);
 
   const handleProviderChange = useCallback((value) => {
     setProvider(value);
@@ -78,12 +104,30 @@ export default function SettingsPage() {
 
   const handleValidate = useCallback(() => {
     setValidationResult(null);
-    fetcher.submit({ intent: "validate", apiKey, provider }, { method: "POST" });
-  }, [fetcher, apiKey, provider]);
+    setIsValidating(true);
+    xhrPost(
+      "/app/settings",
+      { intent: "validate", apiKey, provider, shopDomain },
+      (data) => { setIsValidating(false); setValidationResult(data); },
+      (err) => { setIsValidating(false); setValidationResult({ valid: false, error: err }); }
+    );
+  }, [apiKey, provider, shopDomain]);
 
   const handleSave = useCallback(() => {
-    fetcher.submit({ intent: "save", aiProvider: provider, model, apiKey, faqCount: faqCount.toString(), autoGenerate: autoGenerate.toString() }, { method: "POST" });
-  }, [fetcher, provider, model, apiKey, faqCount, autoGenerate]);
+    setSaveResult(null);
+    setSaveError(null);
+    setIsSaving(true);
+    xhrPost(
+      "/app/settings",
+      { intent: "save", aiProvider: provider, model, apiKey, faqCount: faqCount.toString(), autoGenerate: autoGenerate.toString(), shopDomain },
+      (data) => {
+        setIsSaving(false);
+        if (data.success) setSaveResult(data.message);
+        else setSaveError(data.error || "Save failed. Please try again.");
+      },
+      (err) => { setIsSaving(false); setSaveError(err); }
+    );
+  }, [provider, model, apiKey, faqCount, autoGenerate, shopDomain]);
 
   const modelOptions = (models[provider] || []).map((m) => ({ label: m.label, value: m.value }));
   const providerOptions = [
@@ -92,11 +136,10 @@ export default function SettingsPage() {
   ];
 
   return (
-    <Page title="Settings" subtitle="Configure your AI provider and FAQ generation preferences" backAction={{ content: "Home", url: "/app" }}
-      primaryAction={{ content: isSaving ? "Saving..." : "Save Settings", onAction: handleSave, loading: isSaving, disabled: isSaving }}>
+    <Page title="Settings" subtitle="Configure your AI provider and FAQ generation preferences" backAction={{ content: "Home", url: "/app" }}>
       <BlockStack gap="500">
-        {fetcherData?.success && <Banner title={fetcherData.message} tone="success" />}
-        {fetcherData?.error && <Banner title={fetcherData.error} tone="critical" />}
+        {saveResult && <Banner title={saveResult} tone="success" onDismiss={() => setSaveResult(null)} />}
+        {saveError && <Banner title={saveError} tone="critical" onDismiss={() => setSaveError(null)} />}
         <Layout>
           <Layout.Section>
             <BlockStack gap="400">
@@ -134,6 +177,12 @@ export default function SettingsPage() {
                     <Text as="p" variant="bodySm" tone="subdued">We recommend 5–8 FAQs per product for best user experience</Text>
                   </BlockStack>
                   <Checkbox label="Auto-generate FAQs for new products" checked={autoGenerate} onChange={setAutoGenerate} helpText="When enabled, FAQs will be automatically generated when new products are created" />
+                  <Divider />
+                  <InlineStack align="end">
+                    <Button variant="primary" onClick={handleSave} loading={isSaving} disabled={isSaving}>
+                      {isSaving ? "Saving..." : "Save Settings"}
+                    </Button>
+                  </InlineStack>
                 </BlockStack>
               </Card>
             </BlockStack>
