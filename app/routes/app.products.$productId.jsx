@@ -1,12 +1,11 @@
 import { json } from "@remix-run/node";
-import { useLoaderData, useParams, useNavigate } from "@remix-run/react";
+import { useLoaderData, useParams, useFetcher } from "@remix-run/react";
 import {
   Page, Layout, Card, Text, BlockStack, InlineStack, Button, Banner,
-  Spinner, TextField, Badge, Divider, Box, EmptyState, Modal, Tooltip,
+  Spinner, TextField, Badge, Divider, Box, Modal, Tooltip,
 } from "@shopify/polaris";
 import { DeleteIcon, EditIcon, PlusIcon } from "@shopify/polaris-icons";
-import { useState, useCallback } from "react";
-import { useAppBridge } from "@shopify/app-bridge-react";
+import { useState, useCallback, useEffect } from "react";
 import { authenticate } from "../shopify.server";
 import { fetchProduct, getFaqsFromMetafield, saveFaqsToMetafield } from "../lib/shopify.server";
 import { getShopSettings } from "../lib/settings.server";
@@ -31,19 +30,15 @@ export const loader = async ({ request, params }) => {
 };
 
 export const action = async ({ request, params }) => {
-  if (request.method === "OPTIONS") {
-    return new Response(null, { status: 204 });
-  }
+  if (request.method === "OPTIONS") return new Response(null, { status: 204 });
 
   let admin, session;
   try {
     ({ admin, session } = await authenticate.admin(request));
-  } catch (errorOrResponse) {
-    return json(
-      { error: "Session expired or not embedded. Please reload the page inside your Shopify admin." },
-      { status: 401 }
-    );
+  } catch {
+    return json({ error: "Session expired. Please reload the page inside your Shopify admin." }, { status: 401 });
   }
+
   const url = new URL(request.url);
   const shop = session.shop || url.searchParams.get("shop") || "";
   const productId = `gid://shopify/Product/${params.productId}`;
@@ -62,7 +57,9 @@ export const action = async ({ request, params }) => {
       await incrementUsage(shop, "generation");
       await prisma.productFAQ.upsert({ where: { shop_productId: { shop, productId } }, update: { faqs: JSON.stringify(faqs), isPublished: false }, create: { shop, productId, faqs: JSON.stringify(faqs), isPublished: false } });
       return json({ success: true, faqs, generated: true });
-    } catch (error) { return json({ error: error.message }, { status: 500 }); }
+    } catch (error) {
+      return json({ error: error.message }, { status: 500 });
+    }
   }
 
   if (intent === "save") {
@@ -78,7 +75,9 @@ export const action = async ({ request, params }) => {
       await saveFaqsToMetafield(admin.graphql, productId, faqs);
       await prisma.productFAQ.upsert({ where: { shop_productId: { shop, productId } }, update: { faqs: JSON.stringify(faqs), isPublished: true }, create: { shop, productId, faqs: JSON.stringify(faqs), isPublished: true } });
       return json({ success: true, saved: true, faqs });
-    } catch (error) { return json({ error: error.message }, { status: 500 }); }
+    } catch (error) {
+      return json({ error: error.message }, { status: 500 });
+    }
   }
 
   if (intent === "delete_all") {
@@ -86,7 +85,9 @@ export const action = async ({ request, params }) => {
       await saveFaqsToMetafield(admin.graphql, productId, []);
       await prisma.productFAQ.deleteMany({ where: { shop, productId } });
       return json({ success: true, deleted: true });
-    } catch (error) { return json({ error: error.message }, { status: 500 }); }
+    } catch (error) {
+      return json({ error: error.message }, { status: 500 });
+    }
   }
 
   return json({ error: "Unknown intent" }, { status: 400 });
@@ -94,8 +95,6 @@ export const action = async ({ request, params }) => {
 
 export default function ProductPage() {
   const { product, faqs: initialFaqs, hasSettings, subscription } = useLoaderData();
-  const params = useParams();
-  const shopify = useAppBridge();
 
   const [faqs, setFaqs] = useState(initialFaqs);
   const [editingIndex, setEditingIndex] = useState(null);
@@ -106,96 +105,52 @@ export default function ProductPage() {
   const [upgradeContext, setUpgradeContext] = useState(null);
   const [savedBanner, setSavedBanner] = useState(false);
   const [error, setError] = useState(null);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
 
-  const navigate = useNavigate();
+  // useFetcher lets Remix (+ App Bridge) handle auth token injection automatically.
+  // App Bridge patches window.fetch to add the Bearer token for same-origin requests,
+  // so we never need to call shopify.idToken() manually.
+  const generateFetcher = useFetcher();
+  const saveFetcher = useFetcher();
+  const deleteFetcher = useFetcher();
 
-  // postAction: get a fresh session token then POST to the Remix action
-  const postAction = useCallback(async (body) => {
-    // Guard: App Bridge must be initialised
-    if (!shopify || typeof shopify.idToken !== "function") {
-      throw new Error("App Bridge not available — reload this page inside your Shopify Admin.");
-    }
+  const isGenerating = generateFetcher.state !== "idle";
+  const isSaving = saveFetcher.state !== "idle";
 
-    // Get a session token with an 8-second timeout
-    let token;
-    try {
-      token = await Promise.race([
-        shopify.idToken(),
-        new Promise((_, reject) =>
-          setTimeout(
-            () => reject(new Error("Session token timed out (8 s) — make sure you're inside Shopify Admin.")),
-            8000
-          )
-        ),
-      ]);
-    } catch (err) {
-      throw new Error(`Could not authenticate: ${err.message}`);
-    }
+  useEffect(() => {
+    if (generateFetcher.state !== "idle" || !generateFetcher.data) return;
+    const d = generateFetcher.data;
+    if (d.limitHit) { setUpgradeContext(d.limitError); setShowUpgradeModal(true); }
+    else if (d.error) setError(d.error);
+    else if (d.faqs) { setFaqs(d.faqs); setError(null); }
+  }, [generateFetcher.state, generateFetcher.data]);
 
-    // Use a relative URL so the request stays same-origin
-    const url = `/app/products/${params.productId}`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Bearer ${token}`,
-      },
-      body: new URLSearchParams(body).toString(),
-    });
+  useEffect(() => {
+    if (saveFetcher.state !== "idle" || !saveFetcher.data) return;
+    const d = saveFetcher.data;
+    if (d.limitHit) { setUpgradeContext(d.limitError); setShowUpgradeModal(true); }
+    else if (d.error) setError(d.error);
+    else if (d.saved) setSavedBanner(true);
+  }, [saveFetcher.state, saveFetcher.data]);
 
-    // If we got HTML back, authentication redirected us — surface that clearly
-    const ct = response.headers.get("content-type") || "";
-    if (!ct.includes("application/json")) {
-      throw new Error(`Server returned ${response.status} (non-JSON) — session may have expired, please reload.`);
-    }
+  useEffect(() => {
+    if (deleteFetcher.state !== "idle" || !deleteFetcher.data) return;
+    if (deleteFetcher.data.deleted) { setFaqs([]); setShowDeleteModal(false); }
+  }, [deleteFetcher.state, deleteFetcher.data]);
 
-    return response.json();
-  }, [params.productId, shopify]);
-
-  const handleGenerate = useCallback(async () => {
+  const handleGenerate = useCallback(() => {
     setError(null);
     setSavedBanner(false);
-    setIsGenerating(true);
-    // Toast confirms the click reached JS (visible even if the request fails)
-    try { shopify.toast.show("Generating FAQs…"); } catch (_) { /* App Bridge may not be ready */ }
-    try {
-      const data = await postAction({ intent: "generate" });
-      if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
-      else if (data.error) setError(data.error);
-      else if (data.faqs) setFaqs(data.faqs);
-    } catch (e) {
-      setError(e.message || "Failed to generate FAQs. Please try again.");
-    } finally {
-      setIsGenerating(false);
-    }
-  }, [postAction, shopify]);
+    generateFetcher.submit({ intent: "generate" }, { method: "POST" });
+  }, [generateFetcher]);
 
-  const handleSave = useCallback(async () => {
+  const handleSave = useCallback(() => {
     setError(null);
-    setIsSaving(true);
-    try {
-      const data = await postAction({ intent: "save", faqs: JSON.stringify(faqs) });
-      if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
-      else if (data.error) setError(data.error);
-      else if (data.saved) setSavedBanner(true);
-    } catch (e) {
-      setError("Failed to save FAQs. Please try again.");
-    } finally {
-      setIsSaving(false);
-    }
-  }, [postAction, faqs]);
+    saveFetcher.submit({ intent: "save", faqs: JSON.stringify(faqs) }, { method: "POST" });
+  }, [saveFetcher, faqs]);
 
-  const handleDeleteAll = useCallback(async () => {
-    try {
-      await postAction({ intent: "delete_all" });
-      setFaqs([]);
-      setShowDeleteModal(false);
-    } catch (e) {
-      setError("Failed to delete FAQs.");
-    }
-  }, [postAction]);
+  const handleDeleteAll = useCallback(() => {
+    deleteFetcher.submit({ intent: "delete_all" }, { method: "POST" });
+  }, [deleteFetcher]);
 
   const handleEditStart = useCallback((index) => {
     setEditingIndex(index);
@@ -229,24 +184,49 @@ export default function ProductPage() {
   const genPercent = usage.generations.percent;
   const showGenWarning = genPercent >= 80 && genPercent < 100;
 
+  // This button lives inside the iframe DOM — a direct click, no App Bridge postMessage needed.
+  const generateButton = hasSettings ? (
+    <Button variant="primary" onClick={handleGenerate} loading={isGenerating} disabled={isGenerating}>
+      {isGenerating ? "Generating..." : hasFaqs ? "Regenerate FAQ" : "Generate FAQ"}
+    </Button>
+  ) : (
+    <Button url="/app/settings">Setup AI Provider</Button>
+  );
+
   return (
     <Page
       title={product.title}
       subtitle="Manage AI-generated FAQ section"
-      backAction={{ content: "Products", onAction: () => navigate("/app/products") }}
-      primaryAction={hasFaqs ? { content: isSaving ? "Saving..." : "Save & Publish", onAction: handleSave, loading: isSaving, disabled: isSaving } : undefined}
-      secondaryActions={[
-        hasSettings
-          ? { content: isGenerating ? "Generating..." : hasFaqs ? "Regenerate FAQ" : "Generate FAQ", onAction: handleGenerate, loading: isGenerating, disabled: isGenerating }
-          : { content: "Setup AI Provider", onAction: () => navigate("/app/settings") },
-        ...(hasFaqs ? [{ content: "Delete All FAQs", destructive: true, onAction: () => setShowDeleteModal(true) }] : []),
-      ]}
+      backAction={{ content: "Products", url: "/app/products" }}
+      primaryAction={hasFaqs ? {
+        content: isSaving ? "Saving..." : "Save & Publish",
+        onAction: handleSave,
+        loading: isSaving,
+        disabled: isSaving,
+      } : undefined}
+      secondaryActions={hasFaqs ? [{ content: "Delete All FAQs", destructive: true, onAction: () => setShowDeleteModal(true) }] : []}
     >
       <BlockStack gap="500">
-        {!hasSettings && <Banner title="AI provider not configured" tone="warning" action={{ content: "Go to Settings", onAction: () => navigate("/app/settings") }}><p>Connect your API key in Settings to enable FAQ generation.</p></Banner>}
-        {showGenWarning && <Banner title={`${usage.generations.used} of ${usage.generations.limit} AI generations used this month`} tone="warning" action={{ content: "Upgrade Plan", url: "/app/billing" }}><p>Upgrade to avoid hitting your limit.</p></Banner>}
-        {error && <Banner title="Error" tone="critical" onDismiss={() => setError(null)}><p>{error}</p></Banner>}
-        {savedBanner && <Banner title="FAQs published successfully!" tone="success" onDismiss={() => setSavedBanner(false)}><p>Your FAQ section is now live on the product page.</p></Banner>}
+        {!hasSettings && (
+          <Banner title="AI provider not configured" tone="warning" action={{ content: "Go to Settings", url: "/app/settings" }}>
+            <p>Connect your API key in Settings to enable FAQ generation.</p>
+          </Banner>
+        )}
+        {showGenWarning && (
+          <Banner title={`${usage.generations.used} of ${usage.generations.limit} AI generations used this month`} tone="warning" action={{ content: "Upgrade Plan", url: "/app/billing" }}>
+            <p>Upgrade to avoid hitting your limit.</p>
+          </Banner>
+        )}
+        {error && (
+          <Banner title="Error" tone="critical" onDismiss={() => setError(null)}>
+            <p>{error}</p>
+          </Banner>
+        )}
+        {savedBanner && (
+          <Banner title="FAQs published successfully!" tone="success" onDismiss={() => setSavedBanner(false)}>
+            <p>Your FAQ section is now live on the product page.</p>
+          </Banner>
+        )}
 
         <Layout>
           <Layout.Section>
@@ -273,33 +253,32 @@ export default function ProductPage() {
 
               <Card>
                 <BlockStack gap="400">
+                  {/* Generate button lives here — inside the app iframe, direct click handler */}
                   <InlineStack align="space-between" blockAlign="center">
                     <BlockStack gap="100">
                       <Text as="h2" variant="headingMd">FAQ Section</Text>
-                      {hasFaqs && <Text as="p" tone="subdued" variant="bodySm">{faqs.length} question{faqs.length !== 1 ? "s" : ""}</Text>}
+                      {hasFaqs && (
+                        <Text as="p" tone="subdued" variant="bodySm">
+                          {faqs.length} question{faqs.length !== 1 ? "s" : ""}
+                        </Text>
+                      )}
                     </BlockStack>
                     <InlineStack gap="200">
-                      {hasSettings ? (
-                        <Button
-                          variant="primary"
-                          onClick={handleGenerate}
-                          loading={isGenerating}
-                          disabled={isGenerating}
-                        >
-                          {isGenerating ? "Generating..." : hasFaqs ? "Regenerate FAQ" : "Generate FAQ"}
-                        </Button>
-                      ) : (
-                        <Button onClick={() => navigate("/app/settings")}>Setup AI Provider</Button>
+                      {generateButton}
+                      {hasFaqs && (
+                        <Button icon={PlusIcon} onClick={handleAddFaq} size="slim">Add Question</Button>
                       )}
-                      {hasFaqs && <Button icon={PlusIcon} onClick={handleAddFaq} size="slim">Add Question</Button>}
                     </InlineStack>
                   </InlineStack>
                   <Divider />
+
                   {isGenerating ? (
                     <Box padding="800">
                       <BlockStack gap="400" align="center" inlineAlign="center">
                         <Spinner size="large" />
-                        <Text as="p" tone="subdued" alignment="center">AI is analyzing your product and generating FAQs...</Text>
+                        <Text as="p" tone="subdued" alignment="center">
+                          AI is analyzing your product and generating FAQs...
+                        </Text>
                       </BlockStack>
                     </Box>
                   ) : hasFaqs ? (
@@ -325,8 +304,12 @@ export default function ProductPage() {
                                   <Text as="p" variant="bodyMd" tone="subdued">{faq.answer}</Text>
                                 </BlockStack>
                                 <InlineStack gap="100">
-                                  <Tooltip content="Edit"><Button icon={EditIcon} size="slim" variant="tertiary" onClick={() => handleEditStart(index)} /></Tooltip>
-                                  <Tooltip content="Delete"><Button icon={DeleteIcon} size="slim" variant="tertiary" tone="critical" onClick={() => handleDelete(index)} /></Tooltip>
+                                  <Tooltip content="Edit">
+                                    <Button icon={EditIcon} size="slim" variant="tertiary" onClick={() => handleEditStart(index)} />
+                                  </Tooltip>
+                                  <Tooltip content="Delete">
+                                    <Button icon={DeleteIcon} size="slim" variant="tertiary" tone="critical" onClick={() => handleDelete(index)} />
+                                  </Tooltip>
                                 </InlineStack>
                               </InlineStack>
                             </Box>
@@ -335,9 +318,13 @@ export default function ProductPage() {
                       ))}
                     </BlockStack>
                   ) : (
-                    <EmptyState heading="No FAQs generated yet" image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png" action={hasSettings ? { content: "Generate FAQ", onAction: handleGenerate } : { content: "Setup AI Provider", onAction: () => navigate("/app/settings") }}>
-                      <p>Click Generate FAQ to let AI analyze your product data and create helpful Q&As.</p>
-                    </EmptyState>
+                    <Box padding="800">
+                      <BlockStack gap="400" align="center" inlineAlign="center">
+                        <Text as="p" tone="subdued" alignment="center">
+                          No FAQs yet. Click <strong>Generate FAQ</strong> above to get started.
+                        </Text>
+                      </BlockStack>
+                    </Box>
                   )}
                 </BlockStack>
               </Card>
@@ -346,13 +333,27 @@ export default function ProductPage() {
         </Layout>
       </BlockStack>
 
-      <Modal open={showDeleteModal} onClose={() => setShowDeleteModal(false)} title="Delete all FAQs?"
+      <Modal
+        open={showDeleteModal}
+        onClose={() => setShowDeleteModal(false)}
+        title="Delete all FAQs?"
         primaryAction={{ content: "Delete", destructive: true, onAction: handleDeleteAll }}
-        secondaryActions={[{ content: "Cancel", onAction: () => setShowDeleteModal(false) }]}>
-        <Modal.Section><Text as="p">This will remove the FAQ section from this product page. This cannot be undone.</Text></Modal.Section>
+        secondaryActions={[{ content: "Cancel", onAction: () => setShowDeleteModal(false) }]}
+      >
+        <Modal.Section>
+          <Text as="p">This will remove the FAQ section from this product page. This cannot be undone.</Text>
+        </Modal.Section>
       </Modal>
 
-      <UpgradeModal open={showUpgradeModal} onClose={() => setShowUpgradeModal(false)} reason={upgradeContext?.reason} limitKey={upgradeContext?.limitKey} currentPlan={upgradeContext?.plan} usage={upgradeContext?.usage} limit={upgradeContext?.limit} />
+      <UpgradeModal
+        open={showUpgradeModal}
+        onClose={() => setShowUpgradeModal(false)}
+        reason={upgradeContext?.reason}
+        limitKey={upgradeContext?.limitKey}
+        currentPlan={upgradeContext?.plan}
+        usage={upgradeContext?.usage}
+        limit={upgradeContext?.limit}
+      />
     </Page>
   );
 }
