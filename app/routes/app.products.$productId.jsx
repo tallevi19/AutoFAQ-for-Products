@@ -143,11 +143,13 @@ export default function ProductPage() {
   }, [params.productId, shopDomain]);
 
   const handleGenerate = useCallback(async () => {
+    console.log("[FAQ-DEBUG] handleGenerate fired — starting XHR request");
     setError(null);
     setSavedBanner(false);
     setIsGenerating(true);
     try {
       const data = await apiPost({ intent: "generate" });
+      console.log("[FAQ-DEBUG] XHR response:", data);
       if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
       else if (data.error) setError(data.error);
       else if (data.faqs) setFaqs(data.faqs);
@@ -215,6 +217,9 @@ export default function ProductPage() {
   const genPercent = usage.generations.percent;
   const showGenWarning = genPercent >= 80 && genPercent < 100;
 
+  // DEBUG: remove after confirming deployment
+  console.log("[FAQ-DEBUG] ProductPage render — hasSettings:", hasSettings, "shopDomain:", shopDomain);
+
   const generateButton = hasSettings ? (
     <Button variant="primary" onClick={handleGenerate} loading={isGenerating} disabled={isGenerating}>
       {isGenerating ? "Generating..." : hasFaqs ? "Regenerate FAQ" : "Generate FAQ"}
@@ -226,7 +231,7 @@ export default function ProductPage() {
   return (
     <Page
       title={product.title}
-      subtitle="Manage AI-generated FAQ section"
+      subtitle="Manage AI-generated FAQ section [debug-v5]"
       backAction={{ content: "Products", url: "/app/products" }}
       primaryAction={hasFaqs ? {
         content: isSaving ? "Saving..." : "Save & Publish",
