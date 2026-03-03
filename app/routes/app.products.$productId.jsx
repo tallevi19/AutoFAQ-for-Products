@@ -6,7 +6,8 @@ import {
 } from "@shopify/polaris";
 import { DeleteIcon, EditIcon, PlusIcon } from "@shopify/polaris-icons";
 import { useState, useCallback } from "react";
-import { authenticate, unauthenticated } from "../shopify.server";
+import { useAppBridge } from "@shopify/app-bridge-react";
+import { authenticate } from "../shopify.server";
 import { fetchProduct, getFaqsFromMetafield, saveFaqsToMetafield } from "../lib/shopify.server";
 import { getShopSettings } from "../lib/settings.server";
 import { generateFAQs } from "../lib/ai.server";
@@ -14,10 +15,11 @@ import { canPerformAction, incrementUsage, getSubscriptionSummary } from "../lib
 import { UpgradeModal } from "../components/UpgradeModal.jsx";
 import prisma from "../db.server";
 
+const APP_URL = "https://autofaq-for-products-production.up.railway.app";
+
 export const loader = async ({ request, params }) => {
   const { admin, session } = await authenticate.admin(request);
-  const shopUrl = new URL(request.url);
-  const shopDomain = session.shop || shopUrl.searchParams.get("shop") || "";
+  const shopDomain = session.shop || new URL(request.url).searchParams.get("shop") || "";
   const productId = `gid://shopify/Product/${params.productId}`;
   const [product, settings, summary] = await Promise.all([
     fetchProduct(admin.graphql, productId),
@@ -26,32 +28,15 @@ export const loader = async ({ request, params }) => {
   ]);
   if (!product) throw new Response("Product not found", { status: 404 });
   const { faqs } = await getFaqsFromMetafield(admin.graphql, productId);
-  // shopDomain is passed to the client so XHR-based action calls can authenticate
-  // without needing an App Bridge session token.
-  return json({ product, faqs, hasSettings: !!settings?.apiKey, shopDomain, subscription: summary });
+  return json({ product, faqs, hasSettings: !!settings?.apiKey, subscription: summary });
 };
 
 export const action = async ({ request, params }) => {
-  if (request.method === "OPTIONS") return new Response(null, { status: 204 });
+  const { admin, session } = await authenticate.admin(request);
+  const shopDomain = session.shop;
 
   const formData = await request.formData();
   const intent = formData.get("intent");
-  const shopDomain = formData.get("shopDomain");
-
-  if (!shopDomain) {
-    return json({ error: "Missing shop domain. Please reload the page." }, { status: 400 });
-  }
-
-  // Use unauthenticated.admin so this route works with a plain XHR/fetch call
-  // that does NOT carry an App Bridge Bearer token. The shop session is looked
-  // up from the database using the shopDomain that the loader already validated.
-  let admin;
-  try {
-    ({ admin } = await unauthenticated.admin(shopDomain));
-  } catch {
-    return json({ error: "Could not authenticate. Please reload the page." }, { status: 401 });
-  }
-
   const productId = `gid://shopify/Product/${params.productId}`;
 
   if (intent === "generate") {
@@ -103,8 +88,9 @@ export const action = async ({ request, params }) => {
 };
 
 export default function ProductPage() {
-  const { product, faqs: initialFaqs, hasSettings, subscription, shopDomain } = useLoaderData();
+  const { product, faqs: initialFaqs, hasSettings, subscription } = useLoaderData();
   const params = useParams();
+  const shopify = useAppBridge();
 
   const [faqs, setFaqs] = useState(initialFaqs);
   const [editingIndex, setEditingIndex] = useState(null);
@@ -118,38 +104,27 @@ export default function ProductPage() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Use XMLHttpRequest instead of window.fetch / useFetcher.
-  // App Bridge patches window.fetch to inject session tokens — and redirects the
-  // browser when it cannot obtain one.  XHR is NOT patched by App Bridge, so the
-  // request goes straight to the server.  The server authenticates via
-  // unauthenticated.admin(shopDomain), which looks up the stored session from the
-  // database without needing any Bearer token from the client.
-  const apiPost = useCallback((body) => {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", `/app/products/${params.productId}`, true);
-      xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
-      xhr.onreadystatechange = function () {
-        if (xhr.readyState !== 4) return;
-        try {
-          resolve(JSON.parse(xhr.responseText));
-        } catch {
-          reject(new Error(`Server error (${xhr.status})`));
-        }
-      };
-      xhr.onerror = () => reject(new Error("Network request failed"));
-      xhr.send(new URLSearchParams({ ...body, shopDomain }).toString());
+  const actionUrl = `${APP_URL}/app/products/${params.productId}`;
+
+  const postAction = useCallback(async (body) => {
+    const token = await shopify.idToken();
+    const response = await fetch(actionUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": `Bearer ${token}`,
+      },
+      body: new URLSearchParams(body).toString(),
     });
-  }, [params.productId, shopDomain]);
+    return response.json();
+  }, [actionUrl, shopify]);
 
   const handleGenerate = useCallback(async () => {
-    console.log("[FAQ-DEBUG] handleGenerate fired — starting XHR request");
     setError(null);
     setSavedBanner(false);
     setIsGenerating(true);
     try {
-      const data = await apiPost({ intent: "generate" });
-      console.log("[FAQ-DEBUG] XHR response:", data);
+      const data = await postAction({ intent: "generate" });
       if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
       else if (data.error) setError(data.error);
       else if (data.faqs) setFaqs(data.faqs);
@@ -158,13 +133,13 @@ export default function ProductPage() {
     } finally {
       setIsGenerating(false);
     }
-  }, [apiPost]);
+  }, [postAction]);
 
   const handleSave = useCallback(async () => {
     setError(null);
     setIsSaving(true);
     try {
-      const data = await apiPost({ intent: "save", faqs: JSON.stringify(faqs) });
+      const data = await postAction({ intent: "save", faqs: JSON.stringify(faqs) });
       if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
       else if (data.error) setError(data.error);
       else if (data.saved) setSavedBanner(true);
@@ -173,17 +148,17 @@ export default function ProductPage() {
     } finally {
       setIsSaving(false);
     }
-  }, [apiPost, faqs]);
+  }, [postAction, faqs]);
 
   const handleDeleteAll = useCallback(async () => {
     try {
-      const data = await apiPost({ intent: "delete_all" });
+      const data = await postAction({ intent: "delete_all" });
       if (data.error) setError(data.error);
       else { setFaqs([]); setShowDeleteModal(false); }
     } catch (e) {
       setError(e.message || "Failed to delete FAQs.");
     }
-  }, [apiPost]);
+  }, [postAction]);
 
   const handleEditStart = useCallback((index) => {
     setEditingIndex(index);
@@ -217,9 +192,6 @@ export default function ProductPage() {
   const genPercent = usage.generations.percent;
   const showGenWarning = genPercent >= 80 && genPercent < 100;
 
-  // DEBUG: remove after confirming deployment
-  console.log("[FAQ-DEBUG] ProductPage render — hasSettings:", hasSettings, "shopDomain:", shopDomain);
-
   const generateButton = hasSettings ? (
     <Button variant="primary" onClick={handleGenerate} loading={isGenerating} disabled={isGenerating}>
       {isGenerating ? "Generating..." : hasFaqs ? "Regenerate FAQ" : "Generate FAQ"}
@@ -231,7 +203,7 @@ export default function ProductPage() {
   return (
     <Page
       title={product.title}
-      subtitle="Manage AI-generated FAQ section [debug-v5]"
+      subtitle="Manage AI-generated FAQ section"
       backAction={{ content: "Products", url: "/app/products" }}
       primaryAction={hasFaqs ? {
         content: isSaving ? "Saving..." : "Save & Publish",
