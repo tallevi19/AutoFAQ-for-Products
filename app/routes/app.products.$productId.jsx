@@ -6,7 +6,6 @@ import {
 } from "@shopify/polaris";
 import { DeleteIcon, EditIcon, PlusIcon } from "@shopify/polaris-icons";
 import { useState, useCallback } from "react";
-import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate, unauthenticated } from "../shopify.server";
 import { fetchProduct, getFaqsFromMetafield, saveFaqsToMetafield } from "../lib/shopify.server";
 import { getShopSettings } from "../lib/settings.server";
@@ -31,37 +30,21 @@ export const loader = async ({ request, params }) => {
 
 export const action = async ({ request, params }) => {
   const formData = await request.formData();
+  const shopDomainFromForm = formData.get("shopDomain");
+  if (!shopDomainFromForm) {
+    return json({ error: "Missing shop. Please reload the page." }, { status: 400 });
+  }
+
+  let admin;
+  try {
+    ({ admin } = await unauthenticated.admin(shopDomainFromForm));
+  } catch {
+    return json({ error: "Session expired. Please reload and try again." }, { status: 401 });
+  }
+
+  const shopDomain = shopDomainFromForm;
   const intent = formData.get("intent");
   const productId = `gid://shopify/Product/${params.productId}`;
-
-  let admin, shopDomain;
-
-  // If a Bearer token is present, use Token Exchange auth.
-  // Otherwise fall back to unauthenticated.admin(shopDomain) using the shop
-  // that the client sends in the form body (already validated by the loader).
-  const authHeader = request.headers.get("Authorization") || "";
-  if (authHeader.startsWith("Bearer ")) {
-    try {
-      const result = await authenticate.admin(request);
-      admin = result.admin;
-      shopDomain = result.session.shop;
-    } catch {
-      // Token may be expired/invalid — fall through to unauthenticated path
-    }
-  }
-
-  if (!admin) {
-    const shopDomainFromForm = formData.get("shopDomain");
-    if (!shopDomainFromForm) {
-      return json({ error: "Authentication failed. Please reload the page." }, { status: 401 });
-    }
-    try {
-      ({ admin } = await unauthenticated.admin(shopDomainFromForm));
-      shopDomain = shopDomainFromForm;
-    } catch {
-      return json({ error: "Session expired. Please reload the page and try again." }, { status: 401 });
-    }
-  }
 
   if (intent === "generate") {
     const check = await canPerformAction(shopDomain, "generate");
@@ -111,10 +94,27 @@ export const action = async ({ request, params }) => {
   return json({ error: "Unknown intent" }, { status: 400 });
 };
 
+// Send a plain XHR POST.  App Bridge does NOT patch XHR (only window.fetch),
+// so this request reaches the server without any App Bridge interception.
+function xhrPost(url, fields, onResult, onError) {
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", url, true);
+  xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState !== 4) return;
+    try {
+      onResult(JSON.parse(xhr.responseText));
+    } catch {
+      onError("Server error (" + xhr.status + "). Please try again.");
+    }
+  };
+  xhr.onerror = function () { onError("Network error. Please try again."); };
+  xhr.send(new URLSearchParams(fields).toString());
+}
+
 export default function ProductPage() {
   const { product, faqs: initialFaqs, hasSettings, subscription, shopDomain } = useLoaderData();
   const params = useParams();
-  const shopify = useAppBridge();
 
   const [faqs, setFaqs] = useState(initialFaqs);
   const [editingIndex, setEditingIndex] = useState(null);
@@ -128,87 +128,55 @@ export default function ProductPage() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Use XMLHttpRequest so App Bridge's window.fetch patch never intercepts the
-  // request (App Bridge only patches window.fetch, not XHR).
-  //
-  // We try to get a Shopify ID token from App Bridge first (5-second timeout).
-  // If that succeeds the server uses authenticate.admin (Token Exchange).
-  // If it times out we fall back to sending shopDomain in the body so the
-  // server can authenticate via unauthenticated.admin.
-  const postAction = useCallback((body) => {
-    return new Promise((resolve, reject) => {
-      // Step 1: try to get idToken (with timeout), then send XHR
-      const tokenPromise = shopify
-        ? Promise.race([
-            shopify.idToken(),
-            new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 5000)),
-          ])
-        : Promise.reject(new Error("no-shopify"));
+  const actionUrl = `/app/products/${params.productId}`;
 
-      tokenPromise
-        .then((token) => sendXhr(token, body))
-        .catch(() => sendXhr(null, body));
-
-      function sendXhr(token, body) {
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", `/app/products/${params.productId}`, true);
-        xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
-        if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
-        xhr.onreadystatechange = function () {
-          if (xhr.readyState !== 4) return;
-          try {
-            resolve(JSON.parse(xhr.responseText));
-          } catch {
-            reject(new Error(`Server error (${xhr.status})`));
-          }
-        };
-        xhr.onerror = () => reject(new Error("Network request failed"));
-        // Always include shopDomain so server can use it as a fallback
-        xhr.send(new URLSearchParams({ ...body, shopDomain }).toString());
-      }
-    });
-  }, [params.productId, shopify, shopDomain]);
-
-  const handleGenerate = useCallback(async () => {
+  // Non-async handler: state update + XHR setup both happen synchronously
+  // inside the click event. React flushes isGenerating=true and paints the
+  // spinner before the XHR response arrives.
+  const handleGenerate = useCallback(() => {
     setError(null);
     setSavedBanner(false);
     setIsGenerating(true);
-    try {
-      const data = await postAction({ intent: "generate" });
-      if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
-      else if (data.error) setError(data.error);
-      else if (data.faqs) setFaqs(data.faqs);
-    } catch (e) {
-      setError(e.message || "Failed to generate FAQs. Please try again.");
-    } finally {
-      setIsGenerating(false);
-    }
-  }, [postAction]);
+    xhrPost(
+      actionUrl,
+      { intent: "generate", shopDomain },
+      (data) => {
+        setIsGenerating(false);
+        if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
+        else if (data.error) setError(data.error);
+        else if (data.faqs) setFaqs(data.faqs);
+      },
+      (errMsg) => { setIsGenerating(false); setError(errMsg); }
+    );
+  }, [actionUrl, shopDomain]);
 
-  const handleSave = useCallback(async () => {
+  const handleSave = useCallback(() => {
     setError(null);
     setIsSaving(true);
-    try {
-      const data = await postAction({ intent: "save", faqs: JSON.stringify(faqs) });
-      if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
-      else if (data.error) setError(data.error);
-      else if (data.saved) setSavedBanner(true);
-    } catch (e) {
-      setError(e.message || "Failed to save FAQs. Please try again.");
-    } finally {
-      setIsSaving(false);
-    }
-  }, [postAction, faqs]);
+    xhrPost(
+      actionUrl,
+      { intent: "save", faqs: JSON.stringify(faqs), shopDomain },
+      (data) => {
+        setIsSaving(false);
+        if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
+        else if (data.error) setError(data.error);
+        else if (data.saved) setSavedBanner(true);
+      },
+      (errMsg) => { setIsSaving(false); setError(errMsg); }
+    );
+  }, [actionUrl, faqs, shopDomain]);
 
-  const handleDeleteAll = useCallback(async () => {
-    try {
-      const data = await postAction({ intent: "delete_all" });
-      if (data.error) setError(data.error);
-      else { setFaqs([]); setShowDeleteModal(false); }
-    } catch (e) {
-      setError(e.message || "Failed to delete FAQs.");
-    }
-  }, [postAction]);
+  const handleDeleteAll = useCallback(() => {
+    xhrPost(
+      actionUrl,
+      { intent: "delete_all", shopDomain },
+      (data) => {
+        if (data.error) setError(data.error);
+        else { setFaqs([]); setShowDeleteModal(false); }
+      },
+      (errMsg) => setError(errMsg)
+    );
+  }, [actionUrl, shopDomain]);
 
   const handleEditStart = useCallback((index) => {
     setEditingIndex(index);
@@ -311,14 +279,7 @@ export default function ProductPage() {
               <Card>
                 <BlockStack gap="400">
                   <InlineStack align="space-between" blockAlign="center">
-                    <BlockStack gap="100">
-                      <Text as="h2" variant="headingMd">FAQ Section</Text>
-                      {hasFaqs && (
-                        <Text as="p" tone="subdued" variant="bodySm">
-                          {faqs.length} question{faqs.length !== 1 ? "s" : ""}
-                        </Text>
-                      )}
-                    </BlockStack>
+                    <Text as="h2" variant="headingMd">FAQ Section</Text>
                     <InlineStack gap="200">
                       {generateButton}
                       {hasFaqs && (
