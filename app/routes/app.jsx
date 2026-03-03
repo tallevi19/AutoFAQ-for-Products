@@ -28,11 +28,9 @@ export default function App() {
 
   let host = loaderHost;
   if (typeof window !== "undefined") {
-    if (loaderHost) {
-      sessionStorage.setItem("shopify_host", loaderHost);
-    } else {
-      host = sessionStorage.getItem("shopify_host") || "";
-    }
+    const urlHost = new URLSearchParams(window.location.search).get("host");
+    host = urlHost || loaderHost || sessionStorage.getItem("shopify_host") || "";
+    if (host) sessionStorage.setItem("shopify_host", host);
   }
 
   // Keep ?host= in the URL after every client-side navigation so App Bridge
