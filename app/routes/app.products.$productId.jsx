@@ -7,15 +7,13 @@ import {
 import { DeleteIcon, EditIcon, PlusIcon } from "@shopify/polaris-icons";
 import { useState, useCallback } from "react";
 import { useAppBridge } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
+import { authenticate, unauthenticated } from "../shopify.server";
 import { fetchProduct, getFaqsFromMetafield, saveFaqsToMetafield } from "../lib/shopify.server";
 import { getShopSettings } from "../lib/settings.server";
 import { generateFAQs } from "../lib/ai.server";
 import { canPerformAction, incrementUsage, getSubscriptionSummary } from "../lib/billing.server";
 import { UpgradeModal } from "../components/UpgradeModal.jsx";
 import prisma from "../db.server";
-
-const APP_URL = "https://autofaq-for-products-production.up.railway.app";
 
 export const loader = async ({ request, params }) => {
   const { admin, session } = await authenticate.admin(request);
@@ -28,16 +26,42 @@ export const loader = async ({ request, params }) => {
   ]);
   if (!product) throw new Response("Product not found", { status: 404 });
   const { faqs } = await getFaqsFromMetafield(admin.graphql, productId);
-  return json({ product, faqs, hasSettings: !!settings?.apiKey, subscription: summary });
+  return json({ product, faqs, hasSettings: !!settings?.apiKey, shopDomain, subscription: summary });
 };
 
 export const action = async ({ request, params }) => {
-  const { admin, session } = await authenticate.admin(request);
-  const shopDomain = session.shop;
-
   const formData = await request.formData();
   const intent = formData.get("intent");
   const productId = `gid://shopify/Product/${params.productId}`;
+
+  let admin, shopDomain;
+
+  // If a Bearer token is present, use Token Exchange auth.
+  // Otherwise fall back to unauthenticated.admin(shopDomain) using the shop
+  // that the client sends in the form body (already validated by the loader).
+  const authHeader = request.headers.get("Authorization") || "";
+  if (authHeader.startsWith("Bearer ")) {
+    try {
+      const result = await authenticate.admin(request);
+      admin = result.admin;
+      shopDomain = result.session.shop;
+    } catch {
+      // Token may be expired/invalid — fall through to unauthenticated path
+    }
+  }
+
+  if (!admin) {
+    const shopDomainFromForm = formData.get("shopDomain");
+    if (!shopDomainFromForm) {
+      return json({ error: "Authentication failed. Please reload the page." }, { status: 401 });
+    }
+    try {
+      ({ admin } = await unauthenticated.admin(shopDomainFromForm));
+      shopDomain = shopDomainFromForm;
+    } catch {
+      return json({ error: "Session expired. Please reload the page and try again." }, { status: 401 });
+    }
+  }
 
   if (intent === "generate") {
     const check = await canPerformAction(shopDomain, "generate");
@@ -88,7 +112,7 @@ export const action = async ({ request, params }) => {
 };
 
 export default function ProductPage() {
-  const { product, faqs: initialFaqs, hasSettings, subscription } = useLoaderData();
+  const { product, faqs: initialFaqs, hasSettings, subscription, shopDomain } = useLoaderData();
   const params = useParams();
   const shopify = useAppBridge();
 
@@ -104,20 +128,46 @@ export default function ProductPage() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  const actionUrl = `${APP_URL}/app/products/${params.productId}`;
+  // Use XMLHttpRequest so App Bridge's window.fetch patch never intercepts the
+  // request (App Bridge only patches window.fetch, not XHR).
+  //
+  // We try to get a Shopify ID token from App Bridge first (5-second timeout).
+  // If that succeeds the server uses authenticate.admin (Token Exchange).
+  // If it times out we fall back to sending shopDomain in the body so the
+  // server can authenticate via unauthenticated.admin.
+  const postAction = useCallback((body) => {
+    return new Promise((resolve, reject) => {
+      // Step 1: try to get idToken (with timeout), then send XHR
+      const tokenPromise = shopify
+        ? Promise.race([
+            shopify.idToken(),
+            new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 5000)),
+          ])
+        : Promise.reject(new Error("no-shopify"));
 
-  const postAction = useCallback(async (body) => {
-    const token = await shopify.idToken();
-    const response = await fetch(actionUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Authorization": `Bearer ${token}`,
-      },
-      body: new URLSearchParams(body).toString(),
+      tokenPromise
+        .then((token) => sendXhr(token, body))
+        .catch(() => sendXhr(null, body));
+
+      function sendXhr(token, body) {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", `/app/products/${params.productId}`, true);
+        xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+        if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+        xhr.onreadystatechange = function () {
+          if (xhr.readyState !== 4) return;
+          try {
+            resolve(JSON.parse(xhr.responseText));
+          } catch {
+            reject(new Error(`Server error (${xhr.status})`));
+          }
+        };
+        xhr.onerror = () => reject(new Error("Network request failed"));
+        // Always include shopDomain so server can use it as a fallback
+        xhr.send(new URLSearchParams({ ...body, shopDomain }).toString());
+      }
     });
-    return response.json();
-  }, [actionUrl, shopify]);
+  }, [params.productId, shopify, shopDomain]);
 
   const handleGenerate = useCallback(async () => {
     setError(null);
