@@ -51,16 +51,24 @@ export const action = async ({ request }) => {
     const autoGenerate = formData.get("autoGenerate") === "true";
     const updateData = { aiProvider, model, faqCount: parseInt(faqCount), autoGenerate };
     if (apiKey && !apiKey.includes("•")) updateData.apiKey = apiKey;
-    await saveShopSettings(sessionShop, updateData);
-    return json({ success: true, message: "Settings saved successfully!" });
+    try {
+      await saveShopSettings(sessionShop, updateData);
+      return json({ success: true, message: "Settings saved successfully!" });
+    } catch (err) {
+      return json({ error: `Save failed: ${err.message}` }, { status: 500 });
+    }
   }
 
   if (intent === "validate") {
     const apiKey = formData.get("apiKey");
     const provider = formData.get("provider");
     if (!apiKey || apiKey.includes("•")) return json({ valid: false, error: "Please enter your API key to validate" });
-    const result = await validateApiKey(apiKey, provider);
-    return json(result);
+    try {
+      const result = await validateApiKey(apiKey, provider);
+      return json(result);
+    } catch (err) {
+      return json({ valid: false, error: err.message }, { status: 500 });
+    }
   }
 
   return json({ error: "Unknown intent" }, { status: 400 });

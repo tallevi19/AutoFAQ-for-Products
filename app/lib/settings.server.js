@@ -47,19 +47,28 @@ export async function getShopSettings(shop) {
 }
 
 export async function saveShopSettings(shop, data) {
-  const payload = {
-    shop,
+  const encryptedKey = data.apiKey ? encryptApiKey(data.apiKey) : null;
+
+  const baseFields = {
     aiProvider: data.aiProvider || "openai",
     model: data.model || "gpt-4o",
     faqCount: parseInt(data.faqCount) || 5,
     autoGenerate: data.autoGenerate === true || data.autoGenerate === "true",
-    ...(data.apiKey ? { apiKey: encryptApiKey(data.apiKey) } : {}),
   };
 
   return prisma.shopSettings.upsert({
     where: { shop },
-    update: payload,
-    create: payload,
+    // UPDATE: only touch apiKey when a new value is provided
+    update: {
+      ...baseFields,
+      ...(encryptedKey ? { apiKey: encryptedKey } : {}),
+    },
+    // CREATE: apiKey column is NOT NULL — use a placeholder if no key provided yet
+    create: {
+      shop,
+      ...baseFields,
+      apiKey: encryptedKey ?? encryptApiKey(""),
+    },
   });
 }
 export { DEFAULT_MODELS } from "./models.js";
