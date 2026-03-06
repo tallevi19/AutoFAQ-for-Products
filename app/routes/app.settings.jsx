@@ -5,7 +5,7 @@ import {
   Banner, Select, TextField, Checkbox, Divider, Badge, RangeSlider,
 } from "@shopify/polaris";
 import { useState, useCallback } from "react";
-import { authenticate, unauthenticated } from "../shopify.server";
+import { authenticate } from "../shopify.server";
 import { getShopSettings, saveShopSettings } from "../lib/settings.server";
 import { DEFAULT_MODELS, AVAILABLE_MODELS } from "../lib/models.js";
 import { validateApiKey } from "../lib/ai.server";
@@ -29,19 +29,26 @@ export const loader = async ({ request }) => {
 
 export const action = async ({ request }) => {
   const formData = await request.formData();
-  const shopDomainFromForm = formData.get("shopDomain");
-  if (!shopDomainFromForm) {
+  const shopDomain = formData.get("shopDomain");
+  if (!shopDomain) {
     return json({ error: "Missing shop. Please reload." }, { status: 400 });
-  }
-  let admin, sessionShop;
-  try {
-    ({ admin } = await unauthenticated.admin(shopDomainFromForm));
-    sessionShop = shopDomainFromForm;
-  } catch {
-    return json({ error: "Session expired. Please reload and try again." }, { status: 401 });
   }
 
   const intent = formData.get("intent");
+
+  if (intent === "validate") {
+    const apiKey = formData.get("apiKey");
+    const provider = formData.get("provider");
+    if (!apiKey || apiKey.includes("•")) {
+      return json({ valid: false, error: "Please enter your API key to validate" });
+    }
+    try {
+      const result = await validateApiKey(apiKey, provider);
+      return json(result);
+    } catch (err) {
+      return json({ valid: false, error: err.message });
+    }
+  }
 
   if (intent === "save") {
     const apiKey = formData.get("apiKey");
@@ -52,22 +59,10 @@ export const action = async ({ request }) => {
     const updateData = { aiProvider, model, faqCount: parseInt(faqCount), autoGenerate };
     if (apiKey && !apiKey.includes("•")) updateData.apiKey = apiKey;
     try {
-      await saveShopSettings(sessionShop, updateData);
+      await saveShopSettings(shopDomain, updateData);
       return json({ success: true, message: "Settings saved successfully!" });
     } catch (err) {
-      return json({ error: `Save failed: ${err.message}` }, { status: 500 });
-    }
-  }
-
-  if (intent === "validate") {
-    const apiKey = formData.get("apiKey");
-    const provider = formData.get("provider");
-    if (!apiKey || apiKey.includes("•")) return json({ valid: false, error: "Please enter your API key to validate" });
-    try {
-      const result = await validateApiKey(apiKey, provider);
-      return json(result);
-    } catch (err) {
-      return json({ valid: false, error: err.message }, { status: 500 });
+      return json({ error: `Save failed: ${err.message}` });
     }
   }
 
