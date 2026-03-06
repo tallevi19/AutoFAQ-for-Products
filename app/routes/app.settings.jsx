@@ -1,10 +1,10 @@
 import { json } from "@remix-run/node";
-import { useLoaderData } from "@remix-run/react";
+import { useLoaderData, useFetcher } from "@remix-run/react";
 import {
   Page, Layout, Card, Text, BlockStack, InlineStack, Button,
   Banner, Select, TextField, Checkbox, Divider, Badge, RangeSlider,
 } from "@shopify/polaris";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { authenticate } from "../shopify.server";
 import { getShopSettings, saveShopSettings } from "../lib/settings.server";
 import { DEFAULT_MODELS, AVAILABLE_MODELS } from "../lib/models.js";
@@ -14,7 +14,6 @@ export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const settings = await getShopSettings(session.shop);
   return json({
-    shopDomain: session.shop,
     settings: settings ? {
       aiProvider: settings.aiProvider,
       model: settings.model,
@@ -28,25 +27,22 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
+  const { session } = await authenticate.admin(request);
+  const shopDomain = session.shop;
   const formData = await request.formData();
-  const shopDomain = formData.get("shopDomain");
-  if (!shopDomain) {
-    return json({ error: "Missing shop. Please reload." }, { status: 400 });
-  }
-
   const intent = formData.get("intent");
 
   if (intent === "validate") {
     const apiKey = formData.get("apiKey");
     const provider = formData.get("provider");
     if (!apiKey || apiKey.includes("•")) {
-      return json({ valid: false, error: "Please enter your API key to validate" });
+      return json({ intent: "validate", valid: false, error: "Please enter your API key to validate" });
     }
     try {
       const result = await validateApiKey(apiKey, provider);
-      return json(result);
+      return json({ intent: "validate", ...result });
     } catch (err) {
-      return json({ valid: false, error: err.message });
+      return json({ intent: "validate", valid: false, error: err.message });
     }
   }
 
@@ -60,43 +56,50 @@ export const action = async ({ request }) => {
     if (apiKey && !apiKey.includes("•")) updateData.apiKey = apiKey;
     try {
       await saveShopSettings(shopDomain, updateData);
-      return json({ success: true, message: "Settings saved successfully!" });
+      return json({ intent: "save", success: true, message: "Settings saved successfully!" });
     } catch (err) {
-      return json({ error: `Save failed: ${err.message}` });
+      return json({ intent: "save", error: `Save failed: ${err.message}` });
     }
   }
 
   return json({ error: "Unknown intent" }, { status: 400 });
 };
 
-function xhrPost(url, fields, onResult, onError) {
-  const xhr = new XMLHttpRequest();
-  xhr.open("POST", url, true);
-  xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
-  xhr.onreadystatechange = function () {
-    if (xhr.readyState !== 4) return;
-    try {
-      onResult(JSON.parse(xhr.responseText));
-    } catch {
-      onError("Server error (" + xhr.status + "). Please try again.");
-    }
-  };
-  xhr.onerror = function () { onError("Network error. Please try again."); };
-  xhr.send(new URLSearchParams(fields).toString());
-}
-
 export default function SettingsPage() {
-  const { settings, models, shopDomain } = useLoaderData();
+  const { settings, models } = useLoaderData();
+  const fetcher = useFetcher();
+
   const [provider, setProvider] = useState(settings?.aiProvider || "openai");
   const [model, setModel] = useState(settings?.model || "gpt-4o-mini");
   const [apiKey, setApiKey] = useState(settings?.apiKeyPreview || "");
   const [faqCount, setFaqCount] = useState(settings?.faqCount || 5);
   const [autoGenerate, setAutoGenerate] = useState(settings?.autoGenerate || false);
   const [validationResult, setValidationResult] = useState(null);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isValidating, setIsValidating] = useState(false);
   const [saveResult, setSaveResult] = useState(null);
   const [saveError, setSaveError] = useState(null);
+
+  const lastFetcherData = useRef(null);
+
+  const isSubmitting = fetcher.state !== "idle";
+  const currentIntent = fetcher.formData?.get("intent");
+  const isValidating = isSubmitting && currentIntent === "validate";
+  const isSaving = isSubmitting && currentIntent === "save";
+
+  // Process fetcher responses
+  useEffect(() => {
+    if (fetcher.data && fetcher.data !== lastFetcherData.current && fetcher.state === "idle") {
+      lastFetcherData.current = fetcher.data;
+      if (fetcher.data.intent === "validate") {
+        setValidationResult(fetcher.data);
+      } else if (fetcher.data.intent === "save") {
+        if (fetcher.data.success) {
+          setSaveResult(fetcher.data.message);
+        } else {
+          setSaveError(fetcher.data.error || "Save failed. Please try again.");
+        }
+      }
+    }
+  }, [fetcher.data, fetcher.state]);
 
   const handleProviderChange = useCallback((value) => {
     setProvider(value);
@@ -107,30 +110,20 @@ export default function SettingsPage() {
 
   const handleValidate = useCallback(() => {
     setValidationResult(null);
-    setIsValidating(true);
-    xhrPost(
-      "/app/settings",
-      { intent: "validate", apiKey, provider, shopDomain },
-      (data) => { setIsValidating(false); setValidationResult(data); },
-      (err) => { setIsValidating(false); setValidationResult({ valid: false, error: err }); }
+    fetcher.submit(
+      { intent: "validate", apiKey, provider },
+      { method: "POST" },
     );
-  }, [apiKey, provider, shopDomain]);
+  }, [apiKey, provider, fetcher]);
 
   const handleSave = useCallback(() => {
     setSaveResult(null);
     setSaveError(null);
-    setIsSaving(true);
-    xhrPost(
-      "/app/settings",
-      { intent: "save", aiProvider: provider, model, apiKey, faqCount: faqCount.toString(), autoGenerate: autoGenerate.toString(), shopDomain },
-      (data) => {
-        setIsSaving(false);
-        if (data.success) setSaveResult(data.message);
-        else setSaveError(data.error || "Save failed. Please try again.");
-      },
-      (err) => { setIsSaving(false); setSaveError(err); }
+    fetcher.submit(
+      { intent: "save", aiProvider: provider, model, apiKey, faqCount: faqCount.toString(), autoGenerate: autoGenerate.toString() },
+      { method: "POST" },
     );
-  }, [provider, model, apiKey, faqCount, autoGenerate, shopDomain]);
+  }, [provider, model, apiKey, faqCount, autoGenerate, fetcher]);
 
   const modelOptions = (models[provider] || []).map((m) => ({ label: m.label, value: m.value }));
   const providerOptions = [
@@ -166,7 +159,7 @@ export default function SettingsPage() {
                         {!validationResult.valid && validationResult.error && <Text as="span" variant="bodySm" tone="critical">{validationResult.error}</Text>}
                       </InlineStack>
                     )}
-                    <Text as="p" variant="bodySm" tone="subdued">🔒 Your API key is encrypted before being stored</Text>
+                    <Text as="p" variant="bodySm" tone="subdued">Your API key is encrypted before being stored</Text>
                   </BlockStack>
                 </BlockStack>
               </Card>
@@ -177,7 +170,7 @@ export default function SettingsPage() {
                   <BlockStack gap="200">
                     <Text as="p" variant="bodyMd">Number of FAQs to generate per product: <strong>{faqCount}</strong></Text>
                     <RangeSlider label="FAQ Count" labelHidden min={3} max={15} value={faqCount} onChange={setFaqCount} output />
-                    <Text as="p" variant="bodySm" tone="subdued">We recommend 5–8 FAQs per product for best user experience</Text>
+                    <Text as="p" variant="bodySm" tone="subdued">We recommend 5-8 FAQs per product for best user experience</Text>
                   </BlockStack>
                   <Checkbox label="Auto-generate FAQs for new products" checked={autoGenerate} onChange={setAutoGenerate} helpText="When enabled, FAQs will be automatically generated when new products are created" />
                   <Divider />
@@ -197,10 +190,10 @@ export default function SettingsPage() {
                   <Text as="h2" variant="headingMd">Estimated Costs</Text>
                   <Divider />
                   <BlockStack gap="200">
-                    <CostRow label="GPT-4o" cost="~$0.01–0.03" />
-                    <CostRow label="GPT-4o Mini" cost="~$0.001–0.003" />
-                    <CostRow label="Claude 3.5 Sonnet" cost="~$0.01–0.03" />
-                    <CostRow label="Claude 3.5 Haiku" cost="~$0.002–0.005" />
+                    <CostRow label="GPT-4o" cost="~$0.01-0.03" />
+                    <CostRow label="GPT-4o Mini" cost="~$0.001-0.003" />
+                    <CostRow label="Claude 3.5 Sonnet" cost="~$0.01-0.03" />
+                    <CostRow label="Claude 3.5 Haiku" cost="~$0.002-0.005" />
                   </BlockStack>
                 </BlockStack>
               </Card>
@@ -209,8 +202,8 @@ export default function SettingsPage() {
                   <Text as="h2" variant="headingMd">Need Help?</Text>
                   <Divider />
                   <BlockStack gap="200">
-                    <Button url="https://platform.openai.com/api-keys" external variant="plain">Get OpenAI API Key →</Button>
-                    <Button url="https://console.anthropic.com/" external variant="plain">Get Anthropic API Key →</Button>
+                    <Button url="https://platform.openai.com/api-keys" external variant="plain">Get OpenAI API Key</Button>
+                    <Button url="https://console.anthropic.com/" external variant="plain">Get Anthropic API Key</Button>
                   </BlockStack>
                 </BlockStack>
               </Card>

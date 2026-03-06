@@ -1,12 +1,12 @@
 import { json } from "@remix-run/node";
-import { useLoaderData, useParams } from "@remix-run/react";
+import { useLoaderData, useParams, useFetcher } from "@remix-run/react";
 import {
   Page, Layout, Card, Text, BlockStack, InlineStack, Button, Banner,
   Spinner, TextField, Badge, Divider, Box, Modal, Tooltip,
 } from "@shopify/polaris";
 import { DeleteIcon, EditIcon, PlusIcon } from "@shopify/polaris-icons";
-import { useState, useCallback } from "react";
-import { authenticate, unauthenticated } from "../shopify.server";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { authenticate } from "../shopify.server";
 import { fetchProduct, getFaqsFromMetafield, saveFaqsToMetafield } from "../lib/shopify.server";
 import { getShopSettings } from "../lib/settings.server";
 import { generateFAQs } from "../lib/ai.server";
@@ -16,7 +16,7 @@ import prisma from "../db.server";
 
 export const loader = async ({ request, params }) => {
   const { admin, session } = await authenticate.admin(request);
-  const shopDomain = session.shop || new URL(request.url).searchParams.get("shop") || "";
+  const shopDomain = session.shop;
   const productId = `gid://shopify/Product/${params.productId}`;
   const [product, settings, summary] = await Promise.all([
     fetchProduct(admin.graphql, productId),
@@ -29,37 +29,26 @@ export const loader = async ({ request, params }) => {
 };
 
 export const action = async ({ request, params }) => {
+  const { admin, session } = await authenticate.admin(request);
+  const shopDomain = session.shop;
   const formData = await request.formData();
-  const shopDomainFromForm = formData.get("shopDomain");
-  if (!shopDomainFromForm) {
-    return json({ error: "Missing shop. Please reload the page." }, { status: 400 });
-  }
-
-  let admin;
-  try {
-    ({ admin } = await unauthenticated.admin(shopDomainFromForm));
-  } catch {
-    return json({ error: "Session expired. Please reload and try again." }, { status: 401 });
-  }
-
-  const shopDomain = shopDomainFromForm;
   const intent = formData.get("intent");
   const productId = `gid://shopify/Product/${params.productId}`;
 
   if (intent === "generate") {
     try {
       const check = await canPerformAction(shopDomain, "generate");
-      if (!check.allowed) return json({ limitHit: true, limitError: check }, { status: 403 });
+      if (!check.allowed) return json({ intent: "generate", limitHit: true, limitError: check }, { status: 403 });
       const settings = await getShopSettings(shopDomain);
-      if (!settings?.apiKey) return json({ error: "No API key configured. Go to Settings." }, { status: 400 });
+      if (!settings?.apiKey) return json({ intent: "generate", error: "No API key configured. Go to Settings." }, { status: 400 });
       const product = await fetchProduct(admin.graphql, productId);
-      if (!product) return json({ error: "Product not found" }, { status: 404 });
+      if (!product) return json({ intent: "generate", error: "Product not found" }, { status: 404 });
       const faqs = await generateFAQs({ apiKey: settings.apiKey, provider: settings.aiProvider, model: settings.model, product, faqCount: settings.faqCount });
       await incrementUsage(shopDomain, "generation");
       await prisma.productFAQ.upsert({ where: { shop_productId: { shop: shopDomain, productId } }, update: { faqs: JSON.stringify(faqs), isPublished: false }, create: { shop: shopDomain, productId, faqs: JSON.stringify(faqs), isPublished: false } });
-      return json({ success: true, faqs, generated: true });
+      return json({ intent: "generate", success: true, faqs, generated: true });
     } catch (error) {
-      return json({ error: error.message }, { status: 500 });
+      return json({ intent: "generate", error: error.message }, { status: 500 });
     }
   }
 
@@ -68,16 +57,16 @@ export const action = async ({ request, params }) => {
       const check = await canPerformAction(shopDomain, "publish_faq");
       if (!check.allowed) {
         const existing = await prisma.productFAQ.findUnique({ where: { shop_productId: { shop: shopDomain, productId } } });
-        if (!existing?.isPublished) return json({ limitHit: true, limitError: check }, { status: 403 });
+        if (!existing?.isPublished) return json({ intent: "save", limitHit: true, limitError: check }, { status: 403 });
       }
       const faqsRaw = formData.get("faqs");
       let faqs;
-      try { faqs = JSON.parse(faqsRaw); } catch { return json({ error: "Invalid FAQ data" }, { status: 400 }); }
+      try { faqs = JSON.parse(faqsRaw); } catch { return json({ intent: "save", error: "Invalid FAQ data" }, { status: 400 }); }
       await saveFaqsToMetafield(admin.graphql, productId, faqs);
       await prisma.productFAQ.upsert({ where: { shop_productId: { shop: shopDomain, productId } }, update: { faqs: JSON.stringify(faqs), isPublished: true }, create: { shop: shopDomain, productId, faqs: JSON.stringify(faqs), isPublished: true } });
-      return json({ success: true, saved: true, faqs });
+      return json({ intent: "save", success: true, saved: true, faqs });
     } catch (error) {
-      return json({ error: error.message }, { status: 500 });
+      return json({ intent: "save", error: error.message }, { status: 500 });
     }
   }
 
@@ -85,36 +74,19 @@ export const action = async ({ request, params }) => {
     try {
       await saveFaqsToMetafield(admin.graphql, productId, []);
       await prisma.productFAQ.deleteMany({ where: { shop: shopDomain, productId } });
-      return json({ success: true, deleted: true });
+      return json({ intent: "delete_all", success: true, deleted: true });
     } catch (error) {
-      return json({ error: error.message }, { status: 500 });
+      return json({ intent: "delete_all", error: error.message }, { status: 500 });
     }
   }
 
   return json({ error: "Unknown intent" }, { status: 400 });
 };
 
-// Send a plain XHR POST.  App Bridge does NOT patch XHR (only window.fetch),
-// so this request reaches the server without any App Bridge interception.
-function xhrPost(url, fields, onResult, onError) {
-  const xhr = new XMLHttpRequest();
-  xhr.open("POST", url, true);
-  xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
-  xhr.onreadystatechange = function () {
-    if (xhr.readyState !== 4) return;
-    try {
-      onResult(JSON.parse(xhr.responseText));
-    } catch {
-      onError("Server error (" + xhr.status + "). Please try again.");
-    }
-  };
-  xhr.onerror = function () { onError("Network error. Please try again."); };
-  xhr.send(new URLSearchParams(fields).toString());
-}
-
 export default function ProductPage() {
   const { product, faqs: initialFaqs, hasSettings, subscription, shopDomain } = useLoaderData();
   const params = useParams();
+  const fetcher = useFetcher();
 
   const [faqs, setFaqs] = useState(initialFaqs);
   const [editingIndex, setEditingIndex] = useState(null);
@@ -125,58 +97,73 @@ export default function ProductPage() {
   const [upgradeContext, setUpgradeContext] = useState(null);
   const [savedBanner, setSavedBanner] = useState(false);
   const [error, setError] = useState(null);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
 
-  const actionUrl = `/app/products/${params.productId}`;
+  const lastFetcherData = useRef(null);
 
-  // Non-async handler: state update + XHR setup both happen synchronously
-  // inside the click event. React flushes isGenerating=true and paints the
-  // spinner before the XHR response arrives.
+  // Derive loading states from fetcher
+  const isSubmitting = fetcher.state !== "idle";
+  const currentIntent = fetcher.formData?.get("intent");
+  const isGenerating = isSubmitting && currentIntent === "generate";
+  const isSaving = isSubmitting && currentIntent === "save";
+
+  // Process fetcher responses
+  useEffect(() => {
+    if (fetcher.data && fetcher.data !== lastFetcherData.current && fetcher.state === "idle") {
+      lastFetcherData.current = fetcher.data;
+      const data = fetcher.data;
+
+      if (data.intent === "generate") {
+        if (data.limitHit) {
+          setUpgradeContext(data.limitError);
+          setShowUpgradeModal(true);
+        } else if (data.error) {
+          setError(data.error);
+        } else if (data.faqs) {
+          setFaqs(data.faqs);
+        }
+      } else if (data.intent === "save") {
+        if (data.limitHit) {
+          setUpgradeContext(data.limitError);
+          setShowUpgradeModal(true);
+        } else if (data.error) {
+          setError(data.error);
+        } else if (data.saved) {
+          setSavedBanner(true);
+        }
+      } else if (data.intent === "delete_all") {
+        if (data.error) {
+          setError(data.error);
+        } else if (data.deleted) {
+          setFaqs([]);
+          setShowDeleteModal(false);
+        }
+      }
+    }
+  }, [fetcher.data, fetcher.state]);
+
   const handleGenerate = useCallback(() => {
     setError(null);
     setSavedBanner(false);
-    setIsGenerating(true);
-    xhrPost(
-      actionUrl,
-      { intent: "generate", shopDomain },
-      (data) => {
-        setIsGenerating(false);
-        if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
-        else if (data.error) setError(data.error);
-        else if (data.faqs) setFaqs(data.faqs);
-      },
-      (errMsg) => { setIsGenerating(false); setError(errMsg); }
+    fetcher.submit(
+      { intent: "generate" },
+      { method: "POST" },
     );
-  }, [actionUrl, shopDomain]);
+  }, [fetcher]);
 
   const handleSave = useCallback(() => {
     setError(null);
-    setIsSaving(true);
-    xhrPost(
-      actionUrl,
-      { intent: "save", faqs: JSON.stringify(faqs), shopDomain },
-      (data) => {
-        setIsSaving(false);
-        if (data.limitHit) { setUpgradeContext(data.limitError); setShowUpgradeModal(true); }
-        else if (data.error) setError(data.error);
-        else if (data.saved) setSavedBanner(true);
-      },
-      (errMsg) => { setIsSaving(false); setError(errMsg); }
+    fetcher.submit(
+      { intent: "save", faqs: JSON.stringify(faqs) },
+      { method: "POST" },
     );
-  }, [actionUrl, faqs, shopDomain]);
+  }, [faqs, fetcher]);
 
   const handleDeleteAll = useCallback(() => {
-    xhrPost(
-      actionUrl,
-      { intent: "delete_all", shopDomain },
-      (data) => {
-        if (data.error) setError(data.error);
-        else { setFaqs([]); setShowDeleteModal(false); }
-      },
-      (errMsg) => setError(errMsg)
+    fetcher.submit(
+      { intent: "delete_all" },
+      { method: "POST" },
     );
-  }, [actionUrl, shopDomain]);
+  }, [fetcher]);
 
   const handleEditStart = useCallback((index) => {
     setEditingIndex(index);
@@ -232,7 +219,7 @@ export default function ProductPage() {
       secondaryActions={hasFaqs ? [{ content: "Delete All FAQs", destructive: true, onAction: () => setShowDeleteModal(true) }] : []}
     >
       <BlockStack gap="500">
-        <Banner title={`Status: API key ${hasSettings ? "configured ✓" : "NOT configured ✗"} — Shop: ${shopDomain || "(empty)"}`} tone={hasSettings ? "success" : "warning"} action={hasSettings ? undefined : { content: "Go to Settings", url: "/app/settings" }}>
+        <Banner title={`Status: API key ${hasSettings ? "configured" : "NOT configured"}`} tone={hasSettings ? "success" : "warning"} action={hasSettings ? undefined : { content: "Go to Settings", url: "/app/settings" }}>
           {!hasSettings && <p>Enter and save your API key on the Settings page to enable FAQ generation.</p>}
         </Banner>
         {showGenWarning && (
