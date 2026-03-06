@@ -6,7 +6,7 @@ import {
 } from "@shopify/polaris";
 import { DeleteIcon, EditIcon, PlusIcon } from "@shopify/polaris-icons";
 import { useState, useCallback, useEffect, useRef } from "react";
-import { authenticate } from "../shopify.server";
+import { authenticate, unauthenticated } from "../shopify.server";
 import { fetchProduct, getFaqsFromMetafield, saveFaqsToMetafield } from "../lib/shopify.server";
 import { getShopSettings } from "../lib/settings.server";
 import { generateFAQs } from "../lib/ai.server";
@@ -28,14 +28,22 @@ export const loader = async ({ request, params }) => {
   return json({ product, faqs, hasSettings: !!settings?.apiKey, shopDomain, subscription: summary });
 };
 
-// IMPORTANT: Always return status 200. App Bridge intercepts non-200 responses
-// (especially 401/403) and may redirect to re-auth, breaking useFetcher flows.
+// Action does NOT call authenticate.admin() because it can throw redirect
+// Responses that useFetcher follows, breaking the in-page submission flow.
+// Instead we use unauthenticated.admin(shop) which uses the stored offline
+// access token — no redirects, no body consumption.
 export const action = async ({ request, params }) => {
-  const { admin, session } = await authenticate.admin(request);
-  const shopDomain = session.shop;
   const formData = await request.formData();
   const intent = formData.get("intent");
+  const shopDomain = formData.get("shopDomain");
   const productId = `gid://shopify/Product/${params.productId}`;
+
+  if (!shopDomain) {
+    return json({ intent, error: "Missing shop domain. Please reload the page." });
+  }
+
+  // Get admin API via offline token (no redirect risk)
+  const { admin } = await unauthenticated.admin(shopDomain);
 
   if (intent === "generate") {
     try {
@@ -86,7 +94,7 @@ export const action = async ({ request, params }) => {
 };
 
 export default function ProductPage() {
-  const { product, faqs: initialFaqs, hasSettings, subscription } = useLoaderData();
+  const { product, faqs: initialFaqs, hasSettings, subscription, shopDomain } = useLoaderData();
   const fetcher = useFetcher();
 
   const [faqs, setFaqs] = useState(initialFaqs);
@@ -146,9 +154,10 @@ export default function ProductPage() {
     setError(null);
     const fd = new FormData();
     fd.append("intent", "save");
+    fd.append("shopDomain", shopDomain);
     fd.append("faqs", JSON.stringify(faqs));
     fetcher.submit(fd, { method: "POST" });
-  }, [faqs, fetcher]);
+  }, [faqs, shopDomain, fetcher]);
 
   const handleEditStart = useCallback((index) => {
     setEditingIndex(index);
@@ -246,6 +255,7 @@ export default function ProductPage() {
                       {hasSettings ? (
                         <fetcher.Form method="post">
                           <input type="hidden" name="intent" value="generate" />
+                          <input type="hidden" name="shopDomain" value={shopDomain} />
                           <Button submit variant="primary" loading={isGenerating} disabled={isGenerating}>
                             {isGenerating ? "Generating..." : hasFaqs ? "Regenerate FAQ" : "Generate FAQ"}
                           </Button>
@@ -328,6 +338,7 @@ export default function ProductPage() {
         primaryAction={{ content: "Delete", destructive: true, onAction: () => {
           const fd = new FormData();
           fd.append("intent", "delete_all");
+          fd.append("shopDomain", shopDomain);
           fetcher.submit(fd, { method: "POST" });
         }}}
         secondaryActions={[{ content: "Cancel", onAction: () => setShowDeleteModal(false) }]}

@@ -14,6 +14,7 @@ export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const settings = await getShopSettings(session.shop);
   return json({
+    shop: session.shop,
     settings: settings ? {
       aiProvider: settings.aiProvider,
       model: settings.model,
@@ -26,11 +27,17 @@ export const loader = async ({ request }) => {
   });
 };
 
+// Action does NOT call authenticate.admin() — it can throw redirect Responses
+// that useFetcher follows, breaking in-page submissions. We pass shopDomain
+// from the client (verified in the loader) and access DB directly.
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shopDomain = session.shop;
   const formData = await request.formData();
   const intent = formData.get("intent");
+  const shopDomain = formData.get("shopDomain");
+
+  if (!shopDomain) {
+    return json({ intent, error: "Missing shop domain. Please reload the page." });
+  }
 
   if (intent === "validate") {
     const apiKey = formData.get("apiKey");
@@ -66,7 +73,7 @@ export const action = async ({ request }) => {
 };
 
 export default function SettingsPage() {
-  const { settings, models } = useLoaderData();
+  const { settings, models, shop } = useLoaderData();
   const fetcher = useFetcher();
 
   const [provider, setProvider] = useState(settings?.aiProvider || "openai");
@@ -112,23 +119,25 @@ export default function SettingsPage() {
     setValidationResult(null);
     const fd = new FormData();
     fd.append("intent", "validate");
+    fd.append("shopDomain", shop);
     fd.append("apiKey", apiKey);
     fd.append("provider", provider);
     fetcher.submit(fd, { method: "POST" });
-  }, [apiKey, provider, fetcher]);
+  }, [apiKey, provider, shop, fetcher]);
 
   const handleSave = useCallback(() => {
     setSaveResult(null);
     setSaveError(null);
     const fd = new FormData();
     fd.append("intent", "save");
+    fd.append("shopDomain", shop);
     fd.append("aiProvider", provider);
     fd.append("model", model);
     fd.append("apiKey", apiKey);
     fd.append("faqCount", faqCount.toString());
     fd.append("autoGenerate", autoGenerate.toString());
     fetcher.submit(fd, { method: "POST" });
-  }, [provider, model, apiKey, faqCount, autoGenerate, fetcher]);
+  }, [provider, model, apiKey, faqCount, autoGenerate, shop, fetcher]);
 
   const modelOptions = (models[provider] || []).map((m) => ({ label: m.label, value: m.value }));
   const providerOptions = [
