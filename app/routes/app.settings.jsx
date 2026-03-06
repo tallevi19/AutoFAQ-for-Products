@@ -10,6 +10,11 @@ import { getShopSettings, saveShopSettings } from "../lib/settings.server";
 import { DEFAULT_MODELS, AVAILABLE_MODELS } from "../lib/models.js";
 import { validateApiKey } from "../lib/ai.server";
 
+export const shouldRevalidate = ({ formMethod, defaultShouldRevalidate }) => {
+  if (formMethod === "POST") return false;
+  return defaultShouldRevalidate;
+};
+
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const settings = await getShopSettings(session.shop);

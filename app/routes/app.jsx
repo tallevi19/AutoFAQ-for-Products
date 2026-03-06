@@ -18,6 +18,16 @@ export const loader = async ({ request }) => {
   });
 };
 
+// Prevent this layout loader from revalidating after child-route POST actions
+// (e.g. generate FAQ, save settings). The layout data (apiKey, host) is static
+// and never changes from child actions. Without this, authenticate.admin() in
+// the loader can throw a redirect Response during revalidation, which useFetcher
+// follows — causing the URL to change instead of processing the action result.
+export const shouldRevalidate = ({ formMethod, defaultShouldRevalidate }) => {
+  if (formMethod === "POST") return false;
+  return defaultShouldRevalidate;
+};
+
 export const headers = (headersArgs) => {
   return boundary.headers(headersArgs);
 };
