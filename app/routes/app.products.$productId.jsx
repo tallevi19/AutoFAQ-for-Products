@@ -47,13 +47,13 @@ export const action = async ({ request, params }) => {
   const productId = `gid://shopify/Product/${params.productId}`;
 
   if (intent === "generate") {
-    const check = await canPerformAction(shopDomain, "generate");
-    if (!check.allowed) return json({ limitHit: true, limitError: check }, { status: 403 });
-    const settings = await getShopSettings(shopDomain);
-    if (!settings?.apiKey) return json({ error: "No API key configured. Go to Settings." }, { status: 400 });
-    const product = await fetchProduct(admin.graphql, productId);
-    if (!product) return json({ error: "Product not found" }, { status: 404 });
     try {
+      const check = await canPerformAction(shopDomain, "generate");
+      if (!check.allowed) return json({ limitHit: true, limitError: check }, { status: 403 });
+      const settings = await getShopSettings(shopDomain);
+      if (!settings?.apiKey) return json({ error: "No API key configured. Go to Settings." }, { status: 400 });
+      const product = await fetchProduct(admin.graphql, productId);
+      if (!product) return json({ error: "Product not found" }, { status: 404 });
       const faqs = await generateFAQs({ apiKey: settings.apiKey, provider: settings.aiProvider, model: settings.model, product, faqCount: settings.faqCount });
       await incrementUsage(shopDomain, "generation");
       await prisma.productFAQ.upsert({ where: { shop_productId: { shop: shopDomain, productId } }, update: { faqs: JSON.stringify(faqs), isPublished: false }, create: { shop: shopDomain, productId, faqs: JSON.stringify(faqs), isPublished: false } });
@@ -64,15 +64,15 @@ export const action = async ({ request, params }) => {
   }
 
   if (intent === "save") {
-    const check = await canPerformAction(shopDomain, "publish_faq");
-    if (!check.allowed) {
-      const existing = await prisma.productFAQ.findUnique({ where: { shop_productId: { shop: shopDomain, productId } } });
-      if (!existing?.isPublished) return json({ limitHit: true, limitError: check }, { status: 403 });
-    }
-    const faqsRaw = formData.get("faqs");
-    let faqs;
-    try { faqs = JSON.parse(faqsRaw); } catch { return json({ error: "Invalid FAQ data" }, { status: 400 }); }
     try {
+      const check = await canPerformAction(shopDomain, "publish_faq");
+      if (!check.allowed) {
+        const existing = await prisma.productFAQ.findUnique({ where: { shop_productId: { shop: shopDomain, productId } } });
+        if (!existing?.isPublished) return json({ limitHit: true, limitError: check }, { status: 403 });
+      }
+      const faqsRaw = formData.get("faqs");
+      let faqs;
+      try { faqs = JSON.parse(faqsRaw); } catch { return json({ error: "Invalid FAQ data" }, { status: 400 }); }
       await saveFaqsToMetafield(admin.graphql, productId, faqs);
       await prisma.productFAQ.upsert({ where: { shop_productId: { shop: shopDomain, productId } }, update: { faqs: JSON.stringify(faqs), isPublished: true }, create: { shop: shopDomain, productId, faqs: JSON.stringify(faqs), isPublished: true } });
       return json({ success: true, saved: true, faqs });
