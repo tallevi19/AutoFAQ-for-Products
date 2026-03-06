@@ -62,7 +62,7 @@ export const action = async ({ request }) => {
     }
   }
 
-  return json({ error: "Unknown intent" }, { status: 400 });
+  return json({ error: "Unknown intent" });
 };
 
 export default function SettingsPage() {
@@ -110,19 +110,24 @@ export default function SettingsPage() {
 
   const handleValidate = useCallback(() => {
     setValidationResult(null);
-    fetcher.submit(
-      { intent: "validate", apiKey, provider },
-      { method: "POST" },
-    );
+    const fd = new FormData();
+    fd.append("intent", "validate");
+    fd.append("apiKey", apiKey);
+    fd.append("provider", provider);
+    fetcher.submit(fd, { method: "POST" });
   }, [apiKey, provider, fetcher]);
 
   const handleSave = useCallback(() => {
     setSaveResult(null);
     setSaveError(null);
-    fetcher.submit(
-      { intent: "save", aiProvider: provider, model, apiKey, faqCount: faqCount.toString(), autoGenerate: autoGenerate.toString() },
-      { method: "POST" },
-    );
+    const fd = new FormData();
+    fd.append("intent", "save");
+    fd.append("aiProvider", provider);
+    fd.append("model", model);
+    fd.append("apiKey", apiKey);
+    fd.append("faqCount", faqCount.toString());
+    fd.append("autoGenerate", autoGenerate.toString());
+    fetcher.submit(fd, { method: "POST" });
   }, [provider, model, apiKey, faqCount, autoGenerate, fetcher]);
 
   const modelOptions = (models[provider] || []).map((m) => ({ label: m.label, value: m.value }));

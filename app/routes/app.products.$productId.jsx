@@ -28,6 +28,8 @@ export const loader = async ({ request, params }) => {
   return json({ product, faqs, hasSettings: !!settings?.apiKey, shopDomain, subscription: summary });
 };
 
+// IMPORTANT: Always return status 200. App Bridge intercepts non-200 responses
+// (especially 401/403) and may redirect to re-auth, breaking useFetcher flows.
 export const action = async ({ request, params }) => {
   const { admin, session } = await authenticate.admin(request);
   const shopDomain = session.shop;
@@ -38,17 +40,17 @@ export const action = async ({ request, params }) => {
   if (intent === "generate") {
     try {
       const check = await canPerformAction(shopDomain, "generate");
-      if (!check.allowed) return json({ intent: "generate", limitHit: true, limitError: check }, { status: 403 });
+      if (!check.allowed) return json({ intent: "generate", limitHit: true, limitError: check });
       const settings = await getShopSettings(shopDomain);
-      if (!settings?.apiKey) return json({ intent: "generate", error: "No API key configured. Go to Settings." }, { status: 400 });
+      if (!settings?.apiKey) return json({ intent: "generate", error: "No API key configured. Go to Settings." });
       const product = await fetchProduct(admin.graphql, productId);
-      if (!product) return json({ intent: "generate", error: "Product not found" }, { status: 404 });
+      if (!product) return json({ intent: "generate", error: "Product not found" });
       const faqs = await generateFAQs({ apiKey: settings.apiKey, provider: settings.aiProvider, model: settings.model, product, faqCount: settings.faqCount });
       await incrementUsage(shopDomain, "generation");
       await prisma.productFAQ.upsert({ where: { shop_productId: { shop: shopDomain, productId } }, update: { faqs: JSON.stringify(faqs), isPublished: false }, create: { shop: shopDomain, productId, faqs: JSON.stringify(faqs), isPublished: false } });
       return json({ intent: "generate", success: true, faqs, generated: true });
     } catch (error) {
-      return json({ intent: "generate", error: error.message }, { status: 500 });
+      return json({ intent: "generate", error: error.message });
     }
   }
 
@@ -57,16 +59,16 @@ export const action = async ({ request, params }) => {
       const check = await canPerformAction(shopDomain, "publish_faq");
       if (!check.allowed) {
         const existing = await prisma.productFAQ.findUnique({ where: { shop_productId: { shop: shopDomain, productId } } });
-        if (!existing?.isPublished) return json({ intent: "save", limitHit: true, limitError: check }, { status: 403 });
+        if (!existing?.isPublished) return json({ intent: "save", limitHit: true, limitError: check });
       }
       const faqsRaw = formData.get("faqs");
       let faqs;
-      try { faqs = JSON.parse(faqsRaw); } catch { return json({ intent: "save", error: "Invalid FAQ data" }, { status: 400 }); }
+      try { faqs = JSON.parse(faqsRaw); } catch { return json({ intent: "save", error: "Invalid FAQ data" }); }
       await saveFaqsToMetafield(admin.graphql, productId, faqs);
       await prisma.productFAQ.upsert({ where: { shop_productId: { shop: shopDomain, productId } }, update: { faqs: JSON.stringify(faqs), isPublished: true }, create: { shop: shopDomain, productId, faqs: JSON.stringify(faqs), isPublished: true } });
       return json({ intent: "save", success: true, saved: true, faqs });
     } catch (error) {
-      return json({ intent: "save", error: error.message }, { status: 500 });
+      return json({ intent: "save", error: error.message });
     }
   }
 
@@ -76,16 +78,15 @@ export const action = async ({ request, params }) => {
       await prisma.productFAQ.deleteMany({ where: { shop: shopDomain, productId } });
       return json({ intent: "delete_all", success: true, deleted: true });
     } catch (error) {
-      return json({ intent: "delete_all", error: error.message }, { status: 500 });
+      return json({ intent: "delete_all", error: error.message });
     }
   }
 
-  return json({ error: "Unknown intent" }, { status: 400 });
+  return json({ error: "Unknown intent" });
 };
 
 export default function ProductPage() {
-  const { product, faqs: initialFaqs, hasSettings, subscription, shopDomain } = useLoaderData();
-  const params = useParams();
+  const { product, faqs: initialFaqs, hasSettings, subscription } = useLoaderData();
   const fetcher = useFetcher();
 
   const [faqs, setFaqs] = useState(initialFaqs);
@@ -141,29 +142,13 @@ export default function ProductPage() {
     }
   }, [fetcher.data, fetcher.state]);
 
-  const handleGenerate = useCallback(() => {
-    setError(null);
-    setSavedBanner(false);
-    fetcher.submit(
-      { intent: "generate" },
-      { method: "POST" },
-    );
-  }, [fetcher]);
-
   const handleSave = useCallback(() => {
     setError(null);
-    fetcher.submit(
-      { intent: "save", faqs: JSON.stringify(faqs) },
-      { method: "POST" },
-    );
+    const fd = new FormData();
+    fd.append("intent", "save");
+    fd.append("faqs", JSON.stringify(faqs));
+    fetcher.submit(fd, { method: "POST" });
   }, [faqs, fetcher]);
-
-  const handleDeleteAll = useCallback(() => {
-    fetcher.submit(
-      { intent: "delete_all" },
-      { method: "POST" },
-    );
-  }, [fetcher]);
 
   const handleEditStart = useCallback((index) => {
     setEditingIndex(index);
@@ -196,14 +181,6 @@ export default function ProductPage() {
   const { plan, usage } = subscription;
   const genPercent = usage.generations.percent;
   const showGenWarning = genPercent >= 80 && genPercent < 100;
-
-  const generateButton = hasSettings ? (
-    <Button variant="primary" onClick={handleGenerate} loading={isGenerating} disabled={isGenerating}>
-      {isGenerating ? "Generating..." : hasFaqs ? "Regenerate FAQ" : "Generate FAQ"}
-    </Button>
-  ) : (
-    <Button url="/app/settings">Setup AI Provider</Button>
-  );
 
   return (
     <Page
@@ -266,7 +243,16 @@ export default function ProductPage() {
                   <InlineStack align="space-between" blockAlign="center">
                     <Text as="h2" variant="headingMd">FAQ Section</Text>
                     <InlineStack gap="200">
-                      {generateButton}
+                      {hasSettings ? (
+                        <fetcher.Form method="post">
+                          <input type="hidden" name="intent" value="generate" />
+                          <Button submit variant="primary" loading={isGenerating} disabled={isGenerating}>
+                            {isGenerating ? "Generating..." : hasFaqs ? "Regenerate FAQ" : "Generate FAQ"}
+                          </Button>
+                        </fetcher.Form>
+                      ) : (
+                        <Button url="/app/settings">Setup AI Provider</Button>
+                      )}
                       {hasFaqs && (
                         <Button icon={PlusIcon} onClick={handleAddFaq} size="slim">Add Question</Button>
                       )}
@@ -339,7 +325,11 @@ export default function ProductPage() {
         open={showDeleteModal}
         onClose={() => setShowDeleteModal(false)}
         title="Delete all FAQs?"
-        primaryAction={{ content: "Delete", destructive: true, onAction: handleDeleteAll }}
+        primaryAction={{ content: "Delete", destructive: true, onAction: () => {
+          const fd = new FormData();
+          fd.append("intent", "delete_all");
+          fetcher.submit(fd, { method: "POST" });
+        }}}
         secondaryActions={[{ content: "Cancel", onAction: () => setShowDeleteModal(false) }]}
       >
         <Modal.Section>
