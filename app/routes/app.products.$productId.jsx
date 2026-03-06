@@ -14,6 +14,14 @@ import { canPerformAction, incrementUsage, getSubscriptionSummary } from "../lib
 import { UpgradeModal } from "../components/UpgradeModal.jsx";
 import prisma from "../db.server";
 
+// Skip loader revalidation after POST actions — FAQs are managed in local
+// state and revalidation would trigger authenticate.admin() which can
+// throw redirect Responses that break the useFetcher flow.
+export const shouldRevalidate = ({ formMethod, defaultShouldRevalidate }) => {
+  if (formMethod === "POST") return false;
+  return defaultShouldRevalidate;
+};
+
 export const loader = async ({ request, params }) => {
   const { admin, session } = await authenticate.admin(request);
   const shopDomain = session.shop;
