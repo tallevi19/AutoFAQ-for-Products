@@ -1,5 +1,5 @@
 import { json } from "@remix-run/node";
-import { useLoaderData, useNavigate, useSearchParams } from "@remix-run/react";
+import { useLoaderData, useSearchParams } from "@remix-run/react";
 import {
   Page,
   Layout,
@@ -57,7 +57,6 @@ export const loader = async ({ request }) => {
 
 export default function ProductsPage() {
   const { products, pageInfo, hasSettings } = useLoaderData();
-  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [searchValue, setSearchValue] = useState(searchParams.get("search") || "");
 
