@@ -1,5 +1,5 @@
 import { json } from "@remix-run/node";
-import { useLoaderData, useNavigate, useSearchParams } from "@remix-run/react";
+import { useLoaderData, useSearchParams } from "@remix-run/react";
 import {
   Page,
   Layout,
@@ -57,7 +57,6 @@ export const loader = async ({ request }) => {
 
 export default function ProductsPage() {
   const { products, pageInfo, hasSettings } = useLoaderData();
-  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [searchValue, setSearchValue] = useState(searchParams.get("search") || "");
 
@@ -111,6 +110,14 @@ export default function ProductsPage() {
   ];
 
   const appliedFilters = [];
+  const hostParam = searchParams.get("host");
+  const getProductDetailUrl = useCallback((productNumericId) => {
+    if (!hostParam) return `/app/products/${productNumericId}`;
+    const params = new URLSearchParams();
+    params.set("host", hostParam);
+    return `/app/products/${productNumericId}?${params.toString()}`;
+  }, [hostParam]);
+
   if (searchParams.get("faq")) {
     appliedFilters.push({
       key: "faq",
@@ -154,7 +161,7 @@ export default function ProductsPage() {
           <InlineStack gap="200">
             <Button
               size="slim"
-              onClick={() => navigate(`/app/products/${productNumericId}`)}
+              url={getProductDetailUrl(productNumericId)}
             >
               {product.hasFaq ? "Manage FAQ" : "Generate FAQ"}
             </Button>
