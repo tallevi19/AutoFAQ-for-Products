@@ -1,5 +1,5 @@
 import { json } from "@remix-run/node";
-import { useLoaderData, useParams, useFetcher } from "@remix-run/react";
+import { useLoaderData, useFetcher } from "@remix-run/react";
 import {
   Page, Layout, Card, Text, BlockStack, InlineStack, Button, Banner,
   Spinner, TextField, Badge, Divider, Box, Modal, Tooltip,
@@ -179,6 +179,15 @@ export default function ProductPage() {
     fetcher.submit(fd, { method: "POST" });
   }, [faqs, shopDomain, fetcher]);
 
+  const handleGenerate = useCallback(() => {
+    setError(null);
+    setSavedBanner(false);
+    const fd = new FormData();
+    fd.append("intent", "generate");
+    fd.append("shopDomain", shopDomain);
+    fetcher.submit(fd, { method: "POST" });
+  }, [shopDomain, fetcher]);
+
   const handleEditStart = useCallback((index) => {
     setEditingIndex(index);
     setEditQuestion(faqs[index].question);
@@ -273,13 +282,9 @@ export default function ProductPage() {
                     <Text as="h2" variant="headingMd">FAQ Section</Text>
                     <InlineStack gap="200">
                       {hasSettings ? (
-                        <fetcher.Form method="post">
-                          <input type="hidden" name="intent" value="generate" />
-                          <input type="hidden" name="shopDomain" value={shopDomain} />
-                          <Button submit variant="primary" loading={isGenerating} disabled={isGenerating}>
+                          <Button variant="primary" loading={isGenerating} disabled={isGenerating} onClick={handleGenerate}>
                             {isGenerating ? "Generating..." : hasFaqs ? "Regenerate FAQ" : "Generate FAQ"}
                           </Button>
-                        </fetcher.Form>
                       ) : (
                         <Button url="/app/settings">Setup AI Provider</Button>
                       )}

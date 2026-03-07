@@ -1,5 +1,5 @@
 import { json } from "@remix-run/node";
-import { useLoaderData, useNavigate, useSearchParams } from "@remix-run/react";
+import { useLoaderData, useSearchParams } from "@remix-run/react";
 import {
   Page,
   Layout,
@@ -57,7 +57,6 @@ export const loader = async ({ request }) => {
 
 export default function ProductsPage() {
   const { products, pageInfo, hasSettings } = useLoaderData();
-  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [searchValue, setSearchValue] = useState(searchParams.get("search") || "");
 
@@ -111,6 +110,45 @@ export default function ProductsPage() {
   ];
 
   const appliedFilters = [];
+  const hostParam = searchParams.get("host");
+  const shopParam = searchParams.get("shop");
+
+  const getCurrentHost = useCallback(() => {
+    if (hostParam) return hostParam;
+    if (typeof window === "undefined") return "";
+    const fromUrl = new URLSearchParams(window.location.search).get("host") || "";
+    if (fromUrl) {
+      sessionStorage.setItem("shopify_host", fromUrl);
+      return fromUrl;
+    }
+    return sessionStorage.getItem("shopify_host") || "";
+  }, [hostParam]);
+
+  const getProductDetailUrl = useCallback((productNumericId) => {
+    const params = new URLSearchParams();
+
+    const host = getCurrentHost();
+    if (host) params.set("host", host);
+
+    // Keep shop when available; embedded auth/token exchange flows can rely on it.
+    if (shopParam) {
+      params.set("shop", shopParam);
+    } else if (typeof window !== "undefined") {
+      const fromUrl = new URLSearchParams(window.location.search).get("shop");
+      if (fromUrl) params.set("shop", fromUrl);
+    }
+
+    const query = params.toString();
+    return query
+      ? `/app/products/${productNumericId}?${query}`
+      : `/app/products/${productNumericId}`;
+  }, [getCurrentHost, shopParam]);
+
+  const openProductPage = useCallback((productNumericId) => {
+    const nextUrl = getProductDetailUrl(productNumericId);
+    window.location.href = nextUrl;
+  }, [getProductDetailUrl]);
+
   if (searchParams.get("faq")) {
     appliedFilters.push({
       key: "faq",
@@ -154,7 +192,7 @@ export default function ProductsPage() {
           <InlineStack gap="200">
             <Button
               size="slim"
-              onClick={() => navigate(`/app/products/${productNumericId}`)}
+              onClick={(event) => { event.stopPropagation(); openProductPage(productNumericId); }}
             >
               {product.hasFaq ? "Manage FAQ" : "Generate FAQ"}
             </Button>
