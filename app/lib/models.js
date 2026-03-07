@@ -1,6 +1,6 @@
 export const DEFAULT_MODELS = {
   openai: "gpt-4o-mini",
-  anthropic: "claude-haiku-4-5",
+  anthropic: "claude-haiku-4-5-20251001",
 };
 
 export const AVAILABLE_MODELS = {
@@ -9,7 +9,7 @@ export const AVAILABLE_MODELS = {
     { label: "GPT-4o", value: "gpt-4o" },
   ],
   anthropic: [
-    { label: "Claude 3.5 Haiku (Recommended)", value: "claude-haiku-4-5" },
-    { label: "Claude 3.5 Sonnet", value: "claude-sonnet-4-5" },
+    { label: "Claude Haiku 4.5 (Recommended)", value: "claude-haiku-4-5-20251001" },
+    { label: "Claude Sonnet 4.5", value: "claude-sonnet-4-5-20241022" },
   ],
 };

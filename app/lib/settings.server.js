@@ -51,7 +51,7 @@ export async function saveShopSettings(shop, data) {
 
   const baseFields = {
     aiProvider: data.aiProvider || "openai",
-    model: data.model || "gpt-4o",
+    model: data.model || "gpt-4o-mini",
     faqCount: parseInt(data.faqCount) || 5,
     autoGenerate: data.autoGenerate === true || data.autoGenerate === "true",
   };
