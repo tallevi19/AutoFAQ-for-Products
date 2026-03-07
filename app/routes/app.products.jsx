@@ -111,6 +111,7 @@ export default function ProductsPage() {
 
   const appliedFilters = [];
   const hostParam = searchParams.get("host");
+  const shopParam = searchParams.get("shop");
 
   const getCurrentHost = useCallback(() => {
     if (hostParam) return hostParam;
@@ -124,16 +125,28 @@ export default function ProductsPage() {
   }, [hostParam]);
 
   const getProductDetailUrl = useCallback((productNumericId) => {
-    const host = getCurrentHost();
-    if (!host) return `/app/products/${productNumericId}`;
     const params = new URLSearchParams();
-    params.set("host", host);
-    return `/app/products/${productNumericId}?${params.toString()}`;
-  }, [getCurrentHost]);
+
+    const host = getCurrentHost();
+    if (host) params.set("host", host);
+
+    // Keep shop when available; embedded auth/token exchange flows can rely on it.
+    if (shopParam) {
+      params.set("shop", shopParam);
+    } else if (typeof window !== "undefined") {
+      const fromUrl = new URLSearchParams(window.location.search).get("shop");
+      if (fromUrl) params.set("shop", fromUrl);
+    }
+
+    const query = params.toString();
+    return query
+      ? `/app/products/${productNumericId}?${query}`
+      : `/app/products/${productNumericId}`;
+  }, [getCurrentHost, shopParam]);
 
   const openProductPage = useCallback((productNumericId) => {
     const nextUrl = getProductDetailUrl(productNumericId);
-    window.location.assign(nextUrl);
+    window.location.href = nextUrl;
   }, [getProductDetailUrl]);
 
   if (searchParams.get("faq")) {
@@ -179,7 +192,7 @@ export default function ProductsPage() {
           <InlineStack gap="200">
             <Button
               size="slim"
-              onClick={() => openProductPage(productNumericId)}
+              onClick={(event) => { event.stopPropagation(); openProductPage(productNumericId); }}
             >
               {product.hasFaq ? "Manage FAQ" : "Generate FAQ"}
             </Button>
