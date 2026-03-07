@@ -146,8 +146,8 @@ export default function ProductsPage() {
 
   const openProductPage = useCallback((productNumericId) => {
     const nextUrl = getProductDetailUrl(productNumericId);
-    window.location.href = nextUrl;
-  }, [getProductDetailUrl]);
+    navigate(nextUrl);
+  }, [getProductDetailUrl, navigate]);
 
   if (searchParams.get("faq")) {
     appliedFilters.push({
@@ -192,7 +192,7 @@ export default function ProductsPage() {
           <InlineStack gap="200">
             <Button
               size="slim"
-              onClick={(event) => { event.stopPropagation(); openProductPage(productNumericId); }}
+              onClick={() => openProductPage(productNumericId)}
             >
               {product.hasFaq ? "Manage FAQ" : "Generate FAQ"}
             </Button>
