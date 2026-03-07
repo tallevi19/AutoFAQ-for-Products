@@ -211,8 +211,8 @@ export default function SettingsPage() {
                   <BlockStack gap="200">
                     <CostRow label="GPT-4o" cost="~$0.01-0.03" />
                     <CostRow label="GPT-4o Mini" cost="~$0.001-0.003" />
-                    <CostRow label="Claude 3.5 Sonnet" cost="~$0.01-0.03" />
-                    <CostRow label="Claude 3.5 Haiku" cost="~$0.002-0.005" />
+                    <CostRow label="Claude Sonnet 4.5" cost="~$0.01-0.03" />
+                    <CostRow label="Claude Haiku 4.5" cost="~$0.002-0.005" />
                   </BlockStack>
                 </BlockStack>
               </Card>

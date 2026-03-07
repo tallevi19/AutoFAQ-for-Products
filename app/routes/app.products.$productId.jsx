@@ -51,22 +51,31 @@ export const action = async ({ request, params }) => {
   }
 
   // Get admin API via offline token (no redirect risk)
-  const { admin } = await unauthenticated.admin(shopDomain);
+  let admin;
+  try {
+    ({ admin } = await unauthenticated.admin(shopDomain));
+  } catch (err) {
+    return json({ intent, error: "Session expired or shop not found. Please reload the page and try again." });
+  }
 
   if (intent === "generate") {
     try {
       const check = await canPerformAction(shopDomain, "generate");
       if (!check.allowed) return json({ intent: "generate", limitHit: true, limitError: check });
       const settings = await getShopSettings(shopDomain);
-      if (!settings?.apiKey) return json({ intent: "generate", error: "No API key configured. Go to Settings." });
+      if (!settings?.apiKey) return json({ intent: "generate", error: "No API key configured. Go to Settings to add your API key." });
       const product = await fetchProduct(admin.graphql, productId);
       if (!product) return json({ intent: "generate", error: "Product not found" });
       const faqs = await generateFAQs({ apiKey: settings.apiKey, provider: settings.aiProvider, model: settings.model, product, faqCount: settings.faqCount });
+      if (!Array.isArray(faqs) || faqs.length === 0) {
+        return json({ intent: "generate", error: "AI returned an empty or invalid response. Please try again." });
+      }
       await incrementUsage(shopDomain, "generation");
       await prisma.productFAQ.upsert({ where: { shop_productId: { shop: shopDomain, productId } }, update: { faqs: JSON.stringify(faqs), isPublished: false }, create: { shop: shopDomain, productId, faqs: JSON.stringify(faqs), isPublished: false } });
       return json({ intent: "generate", success: true, faqs, generated: true });
     } catch (error) {
-      return json({ intent: "generate", error: error.message });
+      console.error("FAQ generation error:", error);
+      return json({ intent: "generate", error: error.message || "Failed to generate FAQs. Please check your API key and try again." });
     }
   }
 
@@ -154,6 +163,9 @@ export default function ProductPage() {
           setFaqs([]);
           setShowDeleteModal(false);
         }
+      } else if (data.error) {
+        // Handle errors without a specific intent (e.g. session/auth failures)
+        setError(data.error);
       }
     }
   }, [fetcher.data, fetcher.state]);
