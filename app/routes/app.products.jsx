@@ -1,5 +1,5 @@
 import { json } from "@remix-run/node";
-import { useLoaderData, useNavigate, useSearchParams } from "@remix-run/react";
+import { useLoaderData, useSearchParams } from "@remix-run/react";
 import {
   Page,
   Layout,
@@ -57,7 +57,6 @@ export const loader = async ({ request }) => {
 
 export default function ProductsPage() {
   const { products, pageInfo, hasSettings } = useLoaderData();
-  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [searchValue, setSearchValue] = useState(searchParams.get("search") || "");
 
@@ -111,6 +110,32 @@ export default function ProductsPage() {
   ];
 
   const appliedFilters = [];
+  const hostParam = searchParams.get("host");
+
+  const getCurrentHost = useCallback(() => {
+    if (hostParam) return hostParam;
+    if (typeof window === "undefined") return "";
+    const fromUrl = new URLSearchParams(window.location.search).get("host") || "";
+    if (fromUrl) {
+      sessionStorage.setItem("shopify_host", fromUrl);
+      return fromUrl;
+    }
+    return sessionStorage.getItem("shopify_host") || "";
+  }, [hostParam]);
+
+  const getProductDetailUrl = useCallback((productNumericId) => {
+    const host = getCurrentHost();
+    if (!host) return `/app/products/${productNumericId}`;
+    const params = new URLSearchParams();
+    params.set("host", host);
+    return `/app/products/${productNumericId}?${params.toString()}`;
+  }, [getCurrentHost]);
+
+  const openProductPage = useCallback((productNumericId) => {
+    const nextUrl = getProductDetailUrl(productNumericId);
+    window.location.assign(nextUrl);
+  }, [getProductDetailUrl]);
+
   if (searchParams.get("faq")) {
     appliedFilters.push({
       key: "faq",
@@ -154,7 +179,7 @@ export default function ProductsPage() {
           <InlineStack gap="200">
             <Button
               size="slim"
-              onClick={() => navigate(`/app/products/${productNumericId}`)}
+              onClick={() => openProductPage(productNumericId)}
             >
               {product.hasFaq ? "Manage FAQ" : "Generate FAQ"}
             </Button>
